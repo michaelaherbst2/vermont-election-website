@@ -141,6 +141,23 @@ st.set_page_config(
 )
 
 
+# Keep the page dark immediately during navigation/rerenders.
+# This does not change the original layout.
+st.markdown(
+    """
+<style>
+html,
+body,
+[data-testid="stAppViewContainer"],
+.stApp {
+    background: #020303 !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+
 # =========================================================
 # SESSION STATE
 # =========================================================
