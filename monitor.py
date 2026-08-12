@@ -3,10 +3,11 @@
 
 from pathlib import Path
 from datetime import datetime
-from zoneinfo import ZoneInfo
 import asyncio
+import hashlib
 import json
-
+import os
+import tempfile
 
 import httpx
 import pandas as pd
@@ -19,6 +20,7 @@ import pandas as pd
 APP_DIR = Path(__file__).resolve().parent
 
 RESULTS_DIR = APP_DIR / "vermont_results"
+
 FEDERAL_DIR = RESULTS_DIR / "federal"
 
 STATEWIDE_DIR = RESULTS_DIR / "statewide"
@@ -27,11 +29,41 @@ STATEWIDE_REP_DIR = STATEWIDE_DIR / "republican"
 
 STATUS_FILE = RESULTS_DIR / "status.json"
 
+RU_TIMESTAMPS_FILE = (
+    RESULTS_DIR / "ru_timestamps.json"
+)
+
 STATEWIDE_RAW_JSON = (
     STATEWIDE_DIR / "statewide_live.json"
 )
 
 CHECK_INTERVAL = 30
+
+RU_TIMESTAMP_HISTORY_VERSION = 6
+
+
+# =========================================================
+# FEDERAL FILES
+# =========================================================
+
+FEDERAL_DEM_FILE = (
+    FEDERAL_DIR / "democratic_results.csv"
+)
+
+FEDERAL_REP_FILE = (
+    FEDERAL_DIR / "republican_results.csv"
+)
+
+# One-time migration source for existing Federal files.
+# If the CSV does not exist yet but the old XLSX does,
+# monitor.py will convert the XLSX to CSV automatically.
+LEGACY_FEDERAL_DEM_FILE = (
+    FEDERAL_DIR / "democratic_results.xlsx"
+)
+
+LEGACY_FEDERAL_REP_FILE = (
+    FEDERAL_DIR / "republican_results.xlsx"
+)
 
 
 # =========================================================
@@ -145,11 +177,156 @@ for directory in [
 
 def now_string():
 
-    return datetime.now(
-        ZoneInfo("America/New_York")
-    ).strftime(
+    return datetime.now().strftime(
         "%m/%d/%Y %I:%M:%S %p"
     )
+
+
+# =========================================================
+# SAFE INTEGER
+# =========================================================
+
+def safe_int(
+    value,
+    default=0,
+):
+
+    try:
+
+        if value is None:
+            return default
+
+        return int(
+            float(value)
+        )
+
+    except Exception:
+
+        return default
+
+
+
+# =========================================================
+# ATOMIC FILE WRITES
+# =========================================================
+
+def atomic_write_text(
+    path,
+    text,
+):
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        suffix=".tmp",
+        delete=False,
+    ) as temp_file:
+
+        temp_path = Path(
+            temp_file.name
+        )
+
+        temp_file.write(
+            text
+        )
+
+    os.replace(
+        temp_path,
+        path,
+    )
+
+
+def atomic_to_csv(
+    df,
+    path,
+):
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="",
+        dir=path.parent,
+        suffix=".csv",
+        delete=False,
+    ) as temp_file:
+
+        temp_path = Path(
+            temp_file.name
+        )
+
+    try:
+
+        df.to_csv(
+            temp_path,
+            index=False,
+        )
+
+        os.replace(
+            temp_path,
+            path,
+        )
+
+    finally:
+
+        if temp_path.exists():
+
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+
+
+def atomic_to_excel(
+    df,
+    path,
+):
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent,
+        suffix=".xlsx",
+        delete=False,
+    ) as temp_file:
+
+        temp_path = Path(
+            temp_file.name
+        )
+
+    try:
+
+        df.to_excel(
+            temp_path,
+            index=False,
+        )
+
+        os.replace(
+            temp_path,
+            path,
+        )
+
+    finally:
+
+        if temp_path.exists():
+
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
 
 
 # =========================================================
@@ -185,41 +362,457 @@ def save_status(**updates):
         "error" in updates
         and updates["error"] is None
     ):
+
         status.pop(
             "error",
             None,
         )
 
-    STATUS_FILE.write_text(
+    atomic_write_text(
+        STATUS_FILE,
         json.dumps(
             status,
             indent=2,
-        )
+        ),
     )
 
 
 # =========================================================
-# HELPERS
+# RU TIMESTAMP HISTORY
 # =========================================================
 
-def safe_int(
-    value,
-    default=0,
-):
+def load_ru_timestamps():
+
+    if not RU_TIMESTAMPS_FILE.exists():
+
+        return {
+            "_version":
+                RU_TIMESTAMP_HISTORY_VERSION
+        }
 
     try:
 
-        if value is None:
-            return default
-
-        return int(
-            float(value)
+        data = json.loads(
+            RU_TIMESTAMPS_FILE.read_text()
         )
 
     except Exception:
 
-        return default
+        return {
+            "_version":
+                RU_TIMESTAMP_HISTORY_VERSION
+        }
 
+    # Reset older timestamp history once so the current
+    # snapshot becomes a baseline instead of making every
+    # reporting town look newly updated.
+
+    if (
+        data.get(
+            "_version"
+        )
+        != RU_TIMESTAMP_HISTORY_VERSION
+    ):
+
+        return {
+            "_version":
+                RU_TIMESTAMP_HISTORY_VERSION
+        }
+
+    return data
+
+
+def save_ru_timestamps(data):
+
+    data[
+        "_version"
+    ] = RU_TIMESTAMP_HISTORY_VERSION
+
+    atomic_write_text(
+        RU_TIMESTAMPS_FILE,
+        json.dumps(
+            data,
+            indent=2,
+        ),
+    )
+
+
+# =========================================================
+# ROW SIGNATURE
+# =========================================================
+
+def row_signature(row):
+
+    """
+    Produce a stable signature for an RU.
+
+    Last Updated is intentionally excluded so that the
+    timestamp itself does not make every row appear changed.
+    """
+
+    clean = {}
+
+    ignored_signature_fields = {
+        "Last Updated",
+        "Town",
+        "Rep District",
+        "Sen District",
+        "_source_last_updated",
+        "lastUpdated",
+        "lastUpdatedDate",
+        "updated",
+        "updateTime",
+        "timestamp",
+    }
+
+    for key, value in row.items():
+
+        if str(key) in ignored_signature_fields:
+            continue
+
+        if pd.isna(value):
+            value = None
+
+        elif hasattr(
+            value,
+            "item",
+        ):
+
+            try:
+                value = value.item()
+
+            except Exception:
+                pass
+
+        clean[
+            str(key)
+        ] = value
+
+    payload = json.dumps(
+        clean,
+        sort_keys=True,
+        default=str,
+    )
+
+    return hashlib.sha256(
+        payload.encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+# =========================================================
+# DOES THIS RU ACTUALLY HAVE RESULTS?
+# =========================================================
+
+def row_is_reporting(row):
+
+    """
+    Prefer the source Total when available.
+
+    This prevents an entirely blank/non-reporting town from
+    receiving a misleading update timestamp.
+    """
+
+    for total_name in [
+        "Total",
+        "Total Votes",
+    ]:
+
+        if total_name in row:
+
+            try:
+
+                return (
+                    float(
+                        row[
+                            total_name
+                        ]
+                    )
+                    > 0
+                )
+
+            except Exception:
+
+                pass
+
+    ignored = {
+        "Town",
+        "Rep District",
+        "Sen District",
+        "Last Updated",
+    }
+
+    for key, value in row.items():
+
+        if key in ignored:
+            continue
+
+        try:
+
+            if float(value) > 0:
+                return True
+
+        except Exception:
+            continue
+
+    return False
+
+
+# =========================================================
+# SOURCE RU TIMESTAMP
+# =========================================================
+
+def get_source_ru_timestamp(row):
+
+    """
+    Use a reporting-unit timestamp supplied by Vermont when
+    one is actually present in the parsed row.
+
+    If Vermont does not provide one, return blank and the
+    monitor will use the time it first observes a vote change.
+    """
+
+    possible_fields = [
+        "_source_last_updated",
+        "lastUpdated",
+        "lastUpdatedDate",
+        "updated",
+        "updateTime",
+        "timestamp",
+    ]
+
+    for field in possible_fields:
+
+        value = row.get(
+            field
+        )
+
+        if value is None:
+            continue
+
+        text = str(
+            value
+        ).strip()
+
+        if (
+            text
+            and text.casefold() != "nan"
+        ):
+            return text
+
+    return ""
+
+
+# =========================================================
+# ADD / UPDATE RU TIMESTAMPS
+# =========================================================
+
+def add_ru_timestamps(
+    df,
+    category,
+    party,
+    office,
+    observed_at=None,
+    baseline_at=None,
+):
+
+    if (
+        df is None
+        or df.empty
+        or "Town" not in df.columns
+    ):
+
+        return df
+
+
+    output = df.copy()
+
+    history = load_ru_timestamps()
+
+    history_key = (
+        f"{category}"
+        f"|{party}"
+        f"|{office}"
+    )
+
+    section_history = history.setdefault(
+        history_key,
+        {}
+    )
+
+    if observed_at is None:
+
+        observed_at = now_string()
+
+    if baseline_at is None:
+
+        baseline_at = observed_at
+
+    timestamps = []
+
+
+    for _, row in output.iterrows():
+
+        town = (
+            str(
+                row.get(
+                    "Town",
+                    "",
+                )
+            )
+            .strip()
+            .upper()
+        )
+
+        if not town:
+
+            timestamps.append(
+                ""
+            )
+
+            continue
+
+
+        signature = row_signature(
+            row.to_dict()
+        )
+
+        reporting = row_is_reporting(
+            row.to_dict()
+        )
+
+        source_changed_at = (
+            get_source_ru_timestamp(
+                row.to_dict()
+            )
+        )
+
+        previous = section_history.get(
+            town
+        )
+
+
+        # -------------------------------------------------
+        # FIRST OBSERVATION = GIVE EVERY REPORTING TOWN
+        # AN INITIAL SOURCE TIMESTAMP
+        # -------------------------------------------------
+
+        if previous is None:
+
+            section_history[
+                town
+            ] = {
+                "signature":
+                    signature,
+
+                "last_updated":
+                    (
+                        (
+                            source_changed_at
+                            or baseline_at
+                        )
+                        if reporting
+                        else ""
+                    ),
+
+                "reporting":
+                    reporting,
+            }
+
+
+        # -------------------------------------------------
+        # ACTUAL RESULT CHANGE OBSERVED
+        # -------------------------------------------------
+
+        elif (
+            previous.get(
+                "signature"
+            )
+            != signature
+        ):
+
+            previous_reporting = bool(
+                previous.get(
+                    "reporting",
+                    False,
+                )
+            )
+
+            if (
+                reporting
+                or previous_reporting
+            ):
+
+                changed_at = (
+                    source_changed_at
+                    or observed_at
+                )
+
+            else:
+
+                changed_at = (
+                    previous.get(
+                        "last_updated",
+                        "",
+                    )
+                )
+
+            section_history[
+                town
+            ] = {
+                "signature":
+                    signature,
+
+                "last_updated":
+                    changed_at,
+
+                "reporting":
+                    reporting,
+            }
+
+
+        # -------------------------------------------------
+        # NO CHANGE = KEEP PREVIOUS TIME
+        # -------------------------------------------------
+
+        else:
+
+            section_history[
+                town
+            ][
+                "reporting"
+            ] = reporting
+
+
+        timestamps.append(
+            section_history[
+                town
+            ].get(
+                "last_updated",
+                "",
+            )
+        )
+
+
+    history[
+        history_key
+    ] = section_history
+
+    save_ru_timestamps(
+        history
+    )
+
+    output[
+        "Last Updated"
+    ] = timestamps
+
+    return output
+
+
+# =========================================================
+# COMBINE UNIQUE TEXT
+# =========================================================
 
 def combine_unique(values):
 
@@ -241,6 +834,7 @@ def combine_unique(values):
             continue
 
         if text not in result:
+
             result.append(
                 text
             )
@@ -249,6 +843,10 @@ def combine_unique(values):
         result
     )
 
+
+# =========================================================
+# PARTY
+# =========================================================
 
 def get_party_key(
     party_name,
@@ -270,6 +868,107 @@ def get_party_key(
         return "rep"
 
     return None
+
+
+# =========================================================
+# ELECTION STATUS
+# =========================================================
+
+def get_election_status(manifest):
+
+    """
+    Return the election/results status exactly as Vermont
+    exposes it when possible.
+
+    We do not assume the final wording will be CERTIFIED.
+    The feed might use OFFICIAL, FINAL, CERTIFIED, etc.
+
+    If none of the known status fields are present, fall
+    back to UNOFFICIAL.
+    """
+
+    likely_keys = {
+        "status",
+        "resultStatus",
+        "resultsStatus",
+        "electionStatus",
+        "certificationStatus",
+        "statusText",
+        "resultStatusText",
+        "resultsStatusText",
+    }
+
+    # First check the top level.
+    for key in likely_keys:
+
+        value = manifest.get(
+            key
+        )
+
+        if value is None:
+            continue
+
+        text = str(
+            value
+        ).strip()
+
+        if text:
+            return text.upper()
+
+    # Then search nested dictionaries/lists for a likely
+    # status key. This makes the code more tolerant if the
+    # Vermont manifest moves the field later.
+    def search_nested(value):
+
+        if isinstance(
+            value,
+            dict,
+        ):
+
+            for key, child in value.items():
+
+                if key in likely_keys:
+
+                    text = str(
+                        child
+                    ).strip()
+
+                    if text:
+                        return text.upper()
+
+            for child in value.values():
+
+                found = search_nested(
+                    child
+                )
+
+                if found:
+                    return found
+
+        elif isinstance(
+            value,
+            list,
+        ):
+
+            for child in value:
+
+                found = search_nested(
+                    child
+                )
+
+                if found:
+                    return found
+
+        return None
+
+    found = search_nested(
+        manifest
+    )
+
+    if found:
+        return found
+
+    return "UNOFFICIAL"
 
 
 # =========================================================
@@ -339,6 +1038,7 @@ def build_statewide_office(
         or []
     )
 
+
     rows = []
 
 
@@ -356,13 +1056,33 @@ def build_statewide_office(
             .upper()
         )
 
+
         if not town:
+            continue
+
+
+        # Skip statewide summary / aggregate rows.
+        # Only actual town reporting units belong in the
+        # per-town results table.
+        if is_summary_reporting_unit(
+            town
+        ):
             continue
 
 
         row = {
             "Town":
                 town,
+
+            "_source_last_updated":
+                (
+                    town_block.get("lastUpdated")
+                    or town_block.get("lastUpdatedDate")
+                    or town_block.get("updated")
+                    or town_block.get("updateTime")
+                    or town_block.get("timestamp")
+                    or ""
+                ),
 
             "Rep District":
                 str(
@@ -413,6 +1133,7 @@ def build_statewide_office(
                 .upper()
             )
 
+
             if not candidate_name:
                 continue
 
@@ -437,10 +1158,6 @@ def build_statewide_office(
 
         # =================================================
         # WRITE-INS
-        #
-        # Vermont uses wc for write-in candidates.
-        #
-        # Every wc vote gets added to Total Write Ins.
         # =================================================
 
         total_write_ins = 0
@@ -457,16 +1174,12 @@ def build_statewide_office(
 
         for write_in in write_ins:
 
-            write_in_votes = (
+            total_write_ins += (
                 safe_int(
                     write_in.get(
                         "vc"
                     )
                 )
-            )
-
-            total_write_ins += (
-                write_in_votes
             )
 
 
@@ -477,8 +1190,6 @@ def build_statewide_office(
 
         # =================================================
         # OTHERS
-        #
-        # Keep if Vermont supplies an explicit field.
         # =================================================
 
         others = None
@@ -492,11 +1203,9 @@ def build_statewide_office(
 
             if key in town_block:
 
-                others = (
-                    safe_int(
-                        town_block.get(
-                            key
-                        )
+                others = safe_int(
+                    town_block.get(
+                        key
                     )
                 )
 
@@ -511,11 +1220,7 @@ def build_statewide_office(
 
 
         # =================================================
-        # TOTAL
-        #
-        # sc = Vermont's official source total.
-        #
-        # Do not manufacture this ourselves.
+        # SOURCE TOTAL
         # =================================================
 
         if "sc" in town_block:
@@ -545,13 +1250,14 @@ def build_statewide_office(
 
 
     # =====================================================
-    # FILL NUMERIC COLUMNS
+    # CLEAN TYPES
     # =====================================================
 
     text_columns = {
         "Town",
         "Rep District",
         "Sen District",
+        "_source_last_updated",
     }
 
 
@@ -559,8 +1265,12 @@ def build_statewide_office(
 
         if column in text_columns:
 
-            df[column] = (
-                df[column]
+            df[
+                column
+            ] = (
+                df[
+                    column
+                ]
                 .fillna("")
                 .astype(str)
             )
@@ -568,9 +1278,13 @@ def build_statewide_office(
             continue
 
 
-        df[column] = (
+        df[
+            column
+        ] = (
             pd.to_numeric(
-                df[column],
+                df[
+                    column
+                ],
                 errors="coerce",
             )
             .fillna(0)
@@ -580,15 +1294,6 @@ def build_statewide_office(
 
     # =====================================================
     # COMBINE DUPLICATE TOWNS
-    #
-    # Example:
-    #
-    # BENNINGTON | BENNINGTON-2 | ... | 820
-    # BENNINGTON | BENNINGTON-5 | ... | 625
-    #
-    # becomes:
-    #
-    # BENNINGTON | BENNINGTON-2, BENNINGTON-5 | ... | 1445
     # =====================================================
 
     aggregation = {}
@@ -600,7 +1305,23 @@ def build_statewide_office(
             continue
 
 
-        if column in {
+        if column == "_source_last_updated":
+
+            aggregation[
+                column
+            ] = lambda values: max(
+                [
+                    str(value).strip()
+                    for value in values
+                    if (
+                        not pd.isna(value)
+                        and str(value).strip()
+                    )
+                ],
+                default="",
+            )
+
+        elif column in {
             "Rep District",
             "Sen District",
         }:
@@ -630,8 +1351,6 @@ def build_statewide_office(
 
     # =====================================================
     # REMOVE ZERO-ONLY CANDIDATES
-    #
-    # Keep Total Write Ins even if zero.
     # =====================================================
 
     protected = {
@@ -654,7 +1373,9 @@ def build_statewide_office(
 
 
         numeric = pd.to_numeric(
-            df[column],
+            df[
+                column
+            ],
             errors="coerce",
         )
 
@@ -662,7 +1383,10 @@ def build_statewide_office(
         if (
             numeric.notna().any()
             and
-            numeric.fillna(0).sum() == 0
+            numeric
+            .fillna(0)
+            .sum()
+            == 0
         ):
 
             drop_columns.append(
@@ -680,49 +1404,38 @@ def build_statewide_office(
 
     # =====================================================
     # COLUMN ORDER
-    #
-    # Total always last.
     # =====================================================
 
     first_columns = [
         column
-
         for column in [
             "Town",
             "Rep District",
             "Sen District",
         ]
-
         if column in df.columns
     ]
 
 
     near_end = [
         column
-
         for column in [
             "Total Write Ins",
             "Others",
         ]
-
         if column in df.columns
     ]
 
 
     candidate_columns = [
         column
-
-        for column
-        in df.columns
-
+        for column in df.columns
         if (
-            column
-            not in first_columns
+            column not in first_columns
 
             and
 
-            column
-            not in near_end
+            column not in near_end
 
             and
 
@@ -751,6 +1464,12 @@ def build_statewide_office(
         ordered
     ]
 
+    if "_source_last_updated" in df.columns:
+
+        # Keep this internal metadata only until timestamps
+        # have been assigned; it is not a display column.
+        pass
+
 
     return (
         df
@@ -764,11 +1483,984 @@ def build_statewide_office(
 
 
 # =========================================================
+# SORT BY LAST UPDATED
+# =========================================================
+
+def sort_by_last_updated(df):
+
+    if (
+        df is None
+        or df.empty
+        or "Last Updated" not in df.columns
+    ):
+
+        return df
+
+
+    output = df.copy()
+
+
+    output[
+        "_timestamp_sort"
+    ] = pd.to_datetime(
+        output[
+            "Last Updated"
+        ],
+        errors="coerce",
+    )
+
+
+    output = (
+        output
+        .sort_values(
+            [
+                "_timestamp_sort",
+                "Town",
+            ],
+            ascending=[
+                False,
+                True,
+            ],
+            na_position="last",
+        )
+        .drop(
+            columns=[
+                "_timestamp_sort"
+            ]
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+
+    return output
+
+
+# =========================================================
+# PUT LAST UPDATED AT FRONT
+# =========================================================
+
+def order_timestamp_column(df):
+
+    if (
+        df is None
+        or "Last Updated" not in df.columns
+    ):
+
+        return df
+
+
+    first = []
+
+
+    for column in [
+        "Last Updated",
+        "Town",
+        "Rep District",
+        "Sen District",
+    ]:
+
+        if column in df.columns:
+
+            first.append(
+                column
+            )
+
+
+    remaining = [
+        column
+        for column in df.columns
+        if column not in first
+    ]
+
+
+    return df[
+        first
+        +
+        remaining
+    ]
+
+
+
+# =========================================================
+# SUMMARY REPORTING UNITS
+# =========================================================
+
+def is_summary_reporting_unit(name):
+
+    normalized = (
+        str(
+            name
+            or ""
+        )
+        .strip()
+        .upper()
+        .replace("-", " ")
+        .replace("_", " ")
+    )
+
+    normalized = " ".join(
+        normalized.split()
+    )
+
+    return normalized in {
+        "STATE",
+        "STATE WIDE",
+        "STATEWIDE",
+        "STATE TOTAL",
+        "STATE TOTALS",
+        "TOTAL",
+        "TOTALS",
+    }
+
+
+# =========================================================
+# FEDERAL HELPERS
+# =========================================================
+
+FEDERAL_OFFICE_NAMES = {
+    "REPRESENTATIVE TO CONGRESS",
+    "US REPRESENTATIVE",
+    "U.S. REPRESENTATIVE",
+    "UNITED STATES REPRESENTATIVE",
+    "REPRESENTATIVE",
+}
+
+
+def normalize_office_name(value):
+
+    return (
+        str(
+            value
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+
+
+def build_federal_office(
+    office_block,
+):
+
+    """
+    Build one Federal office into separate Democratic and
+    Republican town DataFrames.
+
+    Vermont's live result payloads use the same compact
+    candidate/town keys seen in the Statewide feed:
+      tn   = town
+      repd = representative district
+      send = senate district
+      rc   = regular candidates
+      wc   = write-ins
+      sc   = source total
+
+    Candidate party may appear on the candidate row. If not,
+    the surrounding party block supplies the party.
+    """
+
+    town_blocks = (
+        office_block.get(
+            "cs",
+            []
+        )
+        or office_block.get(
+            "towns",
+            []
+        )
+        or []
+    )
+
+    rows_by_party = {
+        "dem": [],
+        "rep": [],
+    }
+
+    for town_block in town_blocks:
+
+        town = (
+            str(
+                town_block.get(
+                    "tn",
+                    town_block.get(
+                        "town",
+                        "",
+                    ),
+                )
+                or ""
+            )
+            .strip()
+            .upper()
+        )
+
+        if not town:
+            continue
+
+        # Skip statewide/total aggregate rows from the
+        # Federal feed. Only actual town reporting units
+        # belong in the per-town Federal table.
+        if is_summary_reporting_unit(
+            town
+        ):
+            continue
+
+        base = {
+            "Town":
+                town,
+
+            "_source_last_updated":
+                (
+                    town_block.get("lastUpdated")
+                    or town_block.get("lastUpdatedDate")
+                    or town_block.get("updated")
+                    or town_block.get("updateTime")
+                    or town_block.get("timestamp")
+                    or ""
+                ),
+
+            "Rep District":
+                str(
+                    town_block.get(
+                        "repd",
+                        town_block.get(
+                            "repDistrict",
+                            "",
+                        ),
+                    )
+                    or ""
+                )
+                .strip(),
+
+            "Sen District":
+                str(
+                    town_block.get(
+                        "send",
+                        town_block.get(
+                            "senDistrict",
+                            "",
+                        ),
+                    )
+                    or ""
+                )
+                .strip(),
+        }
+
+        party_rows = {
+            "dem": dict(base),
+            "rep": dict(base),
+        }
+
+        party_has_candidate = {
+            "dem": False,
+            "rep": False,
+        }
+
+        regular_candidates = (
+            town_block.get(
+                "rc",
+                []
+            )
+            or town_block.get(
+                "candidates",
+                []
+            )
+            or []
+        )
+
+        for candidate in regular_candidates:
+
+            candidate_name = (
+                str(
+                    candidate.get(
+                        "cn",
+                        candidate.get(
+                            "name",
+                            "",
+                        ),
+                    )
+                    or ""
+                )
+                .strip()
+                .upper()
+            )
+
+            if not candidate_name:
+                continue
+
+            candidate_party = (
+                candidate.get(
+                    "pn"
+                )
+                or candidate.get(
+                    "party"
+                )
+                or candidate.get(
+                    "partyName"
+                )
+                or ""
+            )
+
+            party_key = get_party_key(
+                candidate_party
+            )
+
+            if party_key is None:
+                continue
+
+            votes = safe_int(
+                candidate.get(
+                    "vc",
+                    candidate.get(
+                        "votes",
+                        0,
+                    ),
+                )
+            )
+
+            party_rows[
+                party_key
+            ][
+                candidate_name
+            ] = (
+                party_rows[
+                    party_key
+                ].get(
+                    candidate_name,
+                    0,
+                )
+                + votes
+            )
+
+            party_has_candidate[
+                party_key
+            ] = True
+
+        # Some Federal payloads put write-ins at the town level.
+        write_ins = (
+            town_block.get(
+                "wc",
+                []
+            )
+            or []
+        )
+
+        total_write_ins = sum(
+            safe_int(
+                item.get(
+                    "vc",
+                    item.get(
+                        "votes",
+                        0,
+                    ),
+                )
+            )
+            for item in write_ins
+        )
+
+        source_total = None
+
+        if "sc" in town_block:
+
+            source_total = safe_int(
+                town_block.get(
+                    "sc"
+                )
+            )
+
+        elif "total" in town_block:
+
+            source_total = safe_int(
+                town_block.get(
+                    "total"
+                )
+            )
+
+        for party_key in [
+            "dem",
+            "rep",
+        ]:
+
+            if not party_has_candidate[
+                party_key
+            ]:
+                continue
+
+            party_rows[
+                party_key
+            ][
+                "Total Write Ins"
+            ] = total_write_ins
+
+            if source_total is not None:
+
+                party_rows[
+                    party_key
+                ][
+                    "Total"
+                ] = source_total
+
+            rows_by_party[
+                party_key
+            ].append(
+                party_rows[
+                    party_key
+                ]
+            )
+
+    result = {}
+
+    for party_key, rows in rows_by_party.items():
+
+        if not rows:
+
+            result[
+                party_key
+            ] = pd.DataFrame()
+
+            continue
+
+        df = pd.DataFrame(
+            rows
+        )
+
+        text_columns = {
+            "Town",
+            "Rep District",
+            "Sen District",
+        }
+
+        for column in df.columns:
+
+            if column in text_columns:
+
+                df[
+                    column
+                ] = (
+                    df[
+                        column
+                    ]
+                    .fillna("")
+                    .astype(str)
+                )
+
+                continue
+
+            df[
+                column
+            ] = (
+                pd.to_numeric(
+                    df[
+                        column
+                    ],
+                    errors="coerce",
+                )
+                .fillna(0)
+                .astype(int)
+            )
+
+        aggregation = {}
+
+        for column in df.columns:
+
+            if column == "Town":
+                continue
+
+            if column in {
+                "Rep District",
+                "Sen District",
+            }:
+
+                aggregation[
+                    column
+                ] = combine_unique
+
+            else:
+
+                aggregation[
+                    column
+                ] = "sum"
+
+        df = (
+            df.groupby(
+                "Town",
+                as_index=False,
+            )
+            .agg(
+                aggregation
+            )
+        )
+
+        protected = {
+            "Town",
+            "Rep District",
+            "Sen District",
+            "Total Write Ins",
+            "Others",
+            "Total",
+        }
+
+        drop_columns = []
+
+        for column in df.columns:
+
+            if column in protected:
+                continue
+
+            numeric = pd.to_numeric(
+                df[
+                    column
+                ],
+                errors="coerce",
+            )
+
+            if (
+                numeric.notna().any()
+                and numeric
+                .fillna(0)
+                .sum()
+                == 0
+            ):
+
+                drop_columns.append(
+                    column
+                )
+
+        if drop_columns:
+
+            df = df.drop(
+                columns=
+                    drop_columns
+            )
+
+        first_columns = [
+            column
+            for column in [
+                "Town",
+                "Rep District",
+                "Sen District",
+            ]
+            if column in df.columns
+        ]
+
+        near_end = [
+            column
+            for column in [
+                "Total Write Ins",
+                "Others",
+            ]
+            if column in df.columns
+        ]
+
+        candidate_columns = [
+            column
+            for column in df.columns
+            if (
+                column not in first_columns
+                and column not in near_end
+                and column != "Total"
+            )
+        ]
+
+        ordered = (
+            first_columns
+            + candidate_columns
+            + near_end
+        )
+
+        if "Total" in df.columns:
+
+            ordered.append(
+                "Total"
+            )
+
+        result[
+            party_key
+        ] = (
+            df[
+                ordered
+            ]
+            .sort_values(
+                "Town"
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+
+    return result
+
+
+def process_federal_json(
+    federal_data,
+    observed_at,
+    baseline_at=None,
+):
+
+    """
+    Find the live U.S. House office in the Vermont Federal
+    payload, build Democratic/Republican town rows, compare
+    against prior observations, and write safe CSV files.
+
+    Last Vote Change stays blank on the initial baseline and
+    changes only when that town's actual result values change.
+    """
+
+    party_blocks = (
+        federal_data.get(
+            "d",
+            []
+        )
+        or []
+    )
+
+    # First try the same party->office structure as Statewide.
+    built = {
+        "dem": pd.DataFrame(),
+        "rep": pd.DataFrame(),
+    }
+
+    for party_block in party_blocks:
+
+        party_key = get_party_key(
+            party_block.get(
+                "pn",
+                "",
+            )
+        )
+
+        offices = (
+            party_block.get(
+                "o",
+                []
+            )
+            or []
+        )
+
+        for office_block in offices:
+
+            office_name = normalize_office_name(
+                office_block.get(
+                    "on",
+                    office_block.get(
+                        "officeName",
+                        "",
+                    ),
+                )
+            )
+
+            if (
+                office_name
+                and office_name
+                not in FEDERAL_OFFICE_NAMES
+                and "REPRESENTATIVE" not in office_name
+                and "CONGRESS" not in office_name
+            ):
+                continue
+
+            # If party is supplied by the outer block and candidate
+            # rows do not carry party, copy it into candidates.
+            if party_key is not None:
+
+                office_copy = json.loads(
+                    json.dumps(
+                        office_block
+                    )
+                )
+
+                for town_block in (
+                    office_copy.get(
+                        "cs",
+                        []
+                    )
+                    or []
+                ):
+
+                    for candidate in (
+                        town_block.get(
+                            "rc",
+                            []
+                        )
+                        or []
+                    ):
+
+                        if not (
+                            candidate.get(
+                                "pn"
+                            )
+                            or candidate.get(
+                                "party"
+                            )
+                            or candidate.get(
+                                "partyName"
+                            )
+                        ):
+
+                            candidate[
+                                "pn"
+                            ] = (
+                                "Democratic"
+                                if party_key == "dem"
+                                else "Republican"
+                            )
+
+                office_results = (
+                    build_federal_office(
+                        office_copy
+                    )
+                )
+
+            else:
+
+                office_results = (
+                    build_federal_office(
+                        office_block
+                    )
+                )
+
+            for key in [
+                "dem",
+                "rep",
+            ]:
+
+                candidate_df = (
+                    office_results.get(
+                        key
+                    )
+                )
+
+                if (
+                    candidate_df is not None
+                    and not candidate_df.empty
+                ):
+
+                    if built[
+                        key
+                    ].empty:
+
+                        built[
+                            key
+                        ] = candidate_df
+
+                    else:
+
+                        built[
+                            key
+                        ] = pd.concat(
+                            [
+                                built[
+                                    key
+                                ],
+                                candidate_df,
+                            ],
+                            ignore_index=True,
+                        )
+
+    # Fallback: Federal payload itself may be one office block.
+    if (
+        built[
+            "dem"
+        ].empty
+        and built[
+            "rep"
+        ].empty
+    ):
+
+        fallback = build_federal_office(
+            federal_data
+        )
+
+        built.update(
+            fallback
+        )
+
+    created = 0
+
+    for party_key, output_file in [
+        (
+            "dem",
+            FEDERAL_DEM_FILE,
+        ),
+        (
+            "rep",
+            FEDERAL_REP_FILE,
+        ),
+    ]:
+
+        df = built.get(
+            party_key
+        )
+
+        if (
+            df is None
+            or df.empty
+        ):
+
+            print(
+                "No live Federal rows found for:",
+                party_key,
+            )
+
+            continue
+
+        wrote = finalize_result_dataframe(
+            df,
+            category="federal",
+            party=party_key,
+            office="REPRESENTATIVE TO CONGRESS",
+            observed_at=observed_at,
+            baseline_at=baseline_at,
+            output_file=output_file,
+            output_format="csv",
+        )
+
+
+        if wrote:
+
+            created += 1
+
+    return created
+
+
+# =========================================================
+# SHARED RESULT FINALIZATION
+# =========================================================
+
+def finalize_result_dataframe(
+    df,
+    category,
+    party,
+    office,
+    observed_at,
+    baseline_at,
+    output_file,
+    output_format="csv",
+):
+
+    """
+    Shared finalization for:
+      - Federal Democratic
+      - Federal Republican
+      - Statewide Democratic
+      - Statewide Republican
+
+    Rules:
+      1. Every reporting town gets an initial baseline timestamp.
+      2. Later vote changes get a newer timestamp.
+      3. Unchanged towns keep their prior timestamp.
+      4. Newest Last Vote Change sorts to the top.
+      5. Summary/aggregate rows are excluded before display.
+    """
+
+    if (
+        df is None
+        or df.empty
+        or "Town" not in df.columns
+    ):
+
+        return False
+
+
+    output = df.copy()
+
+
+    output[
+        "Town"
+    ] = (
+        output[
+            "Town"
+        ]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
+
+    output = output[
+        ~output[
+            "Town"
+        ]
+        .apply(
+            is_summary_reporting_unit
+        )
+    ].copy()
+
+
+    if output.empty:
+
+        return False
+
+
+    output = add_ru_timestamps(
+        output,
+        category=category,
+        party=party,
+        office=office,
+        observed_at=observed_at,
+        baseline_at=baseline_at,
+    )
+
+
+    if "_source_last_updated" in output.columns:
+
+        output = output.drop(
+            columns=[
+                "_source_last_updated"
+            ]
+        )
+
+
+    output = sort_by_last_updated(
+        output
+    )
+
+
+    output = order_timestamp_column(
+        output
+    )
+
+
+    if output_format == "csv":
+
+        atomic_to_csv(
+            output,
+            output_file,
+        )
+
+    else:
+
+        atomic_to_excel(
+            output,
+            output_file,
+        )
+
+
+    print(
+        "Created:",
+        output_file,
+    )
+
+
+    print(
+        "Rows:",
+        len(
+            output
+        ),
+    )
+
+
+    return True
+
+
+# =========================================================
 # PROCESS STATEWIDE JSON
 # =========================================================
 
 def process_statewide_json(
     statewide_data,
+    observed_at,
+    baseline_at=None,
 ):
 
     parties = (
@@ -801,10 +2493,8 @@ def process_statewide_json(
         )
 
 
-        party_key = (
-            get_party_key(
-                party_name
-            )
+        party_key = get_party_key(
+            party_name
         )
 
 
@@ -816,14 +2506,6 @@ def process_statewide_json(
             )
 
             continue
-
-
-        print()
-
-        print(
-            "Processing party:",
-            party_name,
-        )
 
 
         offices = (
@@ -875,10 +2557,8 @@ def process_statewide_json(
             )
 
 
-            df = (
-                build_statewide_office(
-                    office_block
-                )
+            df = build_statewide_office(
+                office_block
             )
 
 
@@ -903,38 +2583,163 @@ def process_statewide_json(
             )
 
 
-            df.to_excel(
-                output_file,
-                index=False,
+            wrote = finalize_result_dataframe(
+                df,
+                category="statewide",
+                party=party_key,
+                office=office_name,
+                observed_at=observed_at,
+                baseline_at=baseline_at,
+                output_file=output_file,
+                output_format="excel",
             )
 
 
-            created += 1
+            if wrote:
 
-
-            print(
-                "Created:",
-                output_file,
-            )
-
-
-            print(
-                "Rows:",
-                len(
-                    df
-                ),
-            )
-
-
-            print(
-                "Columns:",
-                list(
-                    df.columns
-                ),
-            )
+                created += 1
 
 
     return created
+
+
+# =========================================================
+# ENSURE FEDERAL CSV EXISTS
+# =========================================================
+
+def ensure_federal_csv(
+    csv_path,
+    legacy_xlsx_path,
+):
+
+    if csv_path.exists():
+        return True
+
+    if not legacy_xlsx_path.exists():
+        print(
+            "Federal source file not found:",
+            csv_path.name,
+            "or",
+            legacy_xlsx_path.name,
+        )
+        return False
+
+    try:
+
+        df = pd.read_excel(
+            legacy_xlsx_path
+        )
+
+        atomic_to_csv(
+            df,
+            csv_path,
+        )
+
+        print(
+            "Migrated Federal XLSX to CSV:",
+            csv_path.name,
+        )
+
+        return True
+
+    except Exception as error:
+
+        print(
+            "Could not migrate Federal XLSX:",
+            legacy_xlsx_path,
+            error,
+        )
+
+        return False
+
+
+# =========================================================
+# ADD TIMESTAMPS TO EXISTING FEDERAL FILES
+# =========================================================
+
+def update_federal_timestamps(
+    path,
+    legacy_path,
+    party,
+    observed_at,
+):
+
+    if not ensure_federal_csv(
+        path,
+        legacy_path,
+    ):
+
+        return
+
+
+    try:
+
+        df = pd.read_csv(
+            path,
+            dtype=str,
+        )
+
+    except Exception as error:
+
+        print(
+            "Could not timestamp Federal file:",
+            path,
+            error,
+        )
+
+        return
+
+
+    if (
+        df.empty
+        or "Town" not in df.columns
+    ):
+
+        return
+
+
+    # Remove a previous timestamp before calculating
+    # signatures so the timestamp itself never causes
+    # a false result change.
+
+    if "Last Updated" in df.columns:
+
+        df = df.drop(
+            columns=[
+                "Last Updated"
+            ]
+        )
+
+
+    df = add_ru_timestamps(
+        df,
+        category="federal",
+        party=party,
+        office="REPRESENTATIVE TO CONGRESS",
+        observed_at=observed_at,
+    )
+
+
+    df = sort_by_last_updated(
+        df
+    )
+
+
+    df = order_timestamp_column(
+        df
+    )
+
+
+    atomic_to_csv(
+        df,
+        path,
+    )
+
+
+    print(
+        "Updated Federal RU timestamps:",
+        path.name,
+    )
 
 
 # =========================================================
@@ -943,15 +2748,14 @@ def process_statewide_json(
 
 async def check_results():
 
-    checked_at = (
-        now_string()
-    )
+    checked_at = now_string()
 
 
     print()
     print(
         "=" * 70
     )
+
 
     print(
         "Checking Vermont results:",
@@ -973,11 +2777,9 @@ async def check_results():
         # MANIFEST
         # =================================================
 
-        manifest = (
-            await fetch_json(
-                client,
-                MANIFEST_URL,
-            )
+        manifest = await fetch_json(
+            client,
+            MANIFEST_URL,
         )
 
 
@@ -985,11 +2787,9 @@ async def check_results():
         # REPORTING UNITS
         # =================================================
 
-        reporting = (
-            manifest.get(
-                "townsReporting",
-                "0/247",
-            )
+        reporting = manifest.get(
+            "townsReporting",
+            "0/247",
         )
 
 
@@ -1018,9 +2818,16 @@ async def check_results():
             total_units = 247
 
 
-        last_updated = (
+        vermont_last_updated = (
             manifest.get(
                 "lastUpdatedDate"
+            )
+        )
+
+
+        election_status = (
+            get_election_status(
+                manifest
             )
         )
 
@@ -1032,13 +2839,19 @@ async def check_results():
 
 
         print(
-            "Last updated:",
-            last_updated,
+            "Vermont last updated:",
+            vermont_last_updated,
+        )
+
+
+        print(
+            "Election status:",
+            election_status,
         )
 
 
         # =================================================
-        # FEDERAL PATH
+        # CURRENT DATA PATHS
         # =================================================
 
         federal_path = (
@@ -1053,10 +2866,6 @@ async def check_results():
         )
 
 
-        # =================================================
-        # STATEWIDE PATH
-        # =================================================
-
         statewide_path = (
             manifest
             .get(
@@ -1069,17 +2878,13 @@ async def check_results():
         )
 
 
-        federal_url = (
-            build_static_url(
-                federal_path
-            )
+        federal_url = build_static_url(
+            federal_path
         )
 
 
-        statewide_url = (
-            build_static_url(
-                statewide_path
-            )
+        statewide_url = build_static_url(
+            statewide_path
         )
 
 
@@ -1096,7 +2901,7 @@ async def check_results():
 
 
         # =================================================
-        # DOWNLOAD + PROCESS STATEWIDE
+        # STATEWIDE
         # =================================================
 
         statewide_created = 0
@@ -1104,26 +2909,26 @@ async def check_results():
 
         if statewide_url:
 
-            statewide_data = (
-                await fetch_json(
-                    client,
-                    statewide_url,
-                )
+            statewide_data = await fetch_json(
+                client,
+                statewide_url,
             )
 
 
-            # Save exact source JSON locally.
-            STATEWIDE_RAW_JSON.write_text(
+            atomic_write_text(
+                STATEWIDE_RAW_JSON,
                 json.dumps(
                     statewide_data,
                     indent=2,
-                )
+                ),
             )
 
 
             statewide_created = (
                 process_statewide_json(
-                    statewide_data
+                    statewide_data,
+                    observed_at=checked_at,
+                    baseline_at=vermont_last_updated,
                 )
             )
 
@@ -1132,6 +2937,34 @@ async def check_results():
 
             print(
                 "No Statewide path found."
+            )
+
+
+        # =================================================
+        # FEDERAL
+        # =================================================
+
+        federal_created = 0
+
+        if federal_url:
+
+            federal_data = await fetch_json(
+                client,
+                federal_url,
+            )
+
+            federal_created = (
+                process_federal_json(
+                    federal_data,
+                    observed_at=checked_at,
+                    baseline_at=vermont_last_updated,
+                )
+            )
+
+        else:
+
+            print(
+                "No Federal path found."
             )
 
 
@@ -1145,7 +2978,10 @@ async def check_results():
                 checked_at,
 
             last_updated=
-                last_updated,
+                vermont_last_updated,
+
+            election_status=
+                election_status,
 
 
             # Federal
@@ -1164,6 +3000,9 @@ async def check_results():
 
             federal_results_path=
                 federal_path,
+
+            federal_files_created=
+                federal_created,
 
 
             # Statewide
@@ -1292,7 +3131,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         print()
-
         print(
             "Monitor stopped."
         )

@@ -8,6 +8,8 @@ import base64
 import html
 import json
 import asyncio
+import threading
+import time
 
 from monitor import check_results
 import pandas as pd
@@ -29,11 +31,11 @@ STATEWIDE_DEM_DIR = STATEWIDE_DIR / "democrat"
 STATEWIDE_REP_DIR = STATEWIDE_DIR / "republican"
 
 FEDERAL_DEM_FILE = (
-    FEDERAL_DIR / "democratic_results.xlsx"
+    FEDERAL_DIR / "democratic_results.csv"
 )
 
 FEDERAL_REP_FILE = (
-    FEDERAL_DIR / "republican_results.xlsx"
+    FEDERAL_DIR / "republican_results.csv"
 )
 
 STATUS_FILE = RESULTS_DIR / "status.json"
@@ -296,6 +298,11 @@ body,
 
 .ap-unofficial {
     color: #ff4048;
+    font-weight: 800;
+}
+
+.ap-result-status {
+    color: #2fda61;
     font-weight: 800;
 }
 
@@ -578,7 +585,6 @@ body,
 .office-label {
     color: #bbbbbb;
     font-size: 12px;
-
     margin-top: 4px;
     margin-bottom: 5px;
 }
@@ -587,14 +593,66 @@ body,
     max-width: 430px;
 }
 
-[data-testid="stSelectbox"] > div > div {
+/* Closed selectbox */
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
     background: #080909 !important;
-
-    border: 1px solid #3a3a3a !important;
-
-    border-radius: 5px !important;
+    border-color: #3a3a3a !important;
+    color: #ffffff !important;
 }
 
+/* Selected office text */
+[data-testid="stSelectbox"] div[data-baseweb="select"] span {
+    color: #ffffff !important;
+}
+
+/* Dropdown arrow */
+/* Dropdown arrow — black */
+[data-testid="stSelectbox"] svg {
+    fill: #000000 !important;
+    color: #000000 !important;
+}
+
+/* Open dropdown */
+div[data-baseweb="popover"] {
+    background: #080909 !important;
+}
+
+div[data-baseweb="popover"] > div {
+    background: #080909 !important;
+}
+
+/* Dropdown list */
+ul[role="listbox"] {
+    background: #080909 !important;
+}
+
+/* Every office option */
+li[role="option"] {
+    background: #080909 !important;
+    color: #ffffff !important;
+}
+
+/* Text inside options */
+li[role="option"] * {
+    color: #ffffff !important;
+}
+
+/* Hovered option */
+li[role="option"]:hover {
+    background: #181818 !important;
+    color: #ffffff !important;
+}
+
+/* Currently selected option */
+li[role="option"][aria-selected="true"] {
+    background: #202020 !important;
+    color: #ffffff !important;
+}
+
+/* Keep selected option text white */
+li[role="option"][aria-selected="true"] * {
+    color: #ffffff !important;
+}
 
 /* =====================================================
    RESULT CARD
@@ -763,37 +821,57 @@ body,
     text-align: right;
 }
 
+.results-table td:nth-child(1),
+.results-table td:nth-child(2),
+.results-table td:nth-child(3),
+.results-table td:nth-child(4) {
+    text-align: left;
+}
+
 
 /* =====================================================
    COLUMN WIDTHS
    ===================================================== */
 
+/* Last Updated */
 .results-table th:nth-child(1),
 .results-table td:nth-child(1) {
-    width: 145px;
-    min-width: 120px;
-    max-width: 160px;
+    width: 220px;
+    min-width: 220px;
+    max-width: 220px;
+    text-align: left;
+    white-space: nowrap;
 }
 
+/* Town */
 .results-table th:nth-child(2),
 .results-table td:nth-child(2) {
-    width: 170px;
-    min-width: 135px;
-    max-width: 170px;
+    width: 165px;
+    min-width: 145px;
+    max-width: 180px;
+    text-align: left;
+    white-space: nowrap;
+}
 
+/* Rep District */
+.results-table th:nth-child(3),
+.results-table td:nth-child(3) {
+    width: 185px;
+    min-width: 150px;
+    max-width: 210px;
+    text-align: left;
     white-space: normal;
-
     overflow-wrap: break-word;
 }
 
-.results-table th:nth-child(3),
-.results-table td:nth-child(3) {
-    width: 130px;
-    min-width: 110px;
-    max-width: 130px;
-
+/* Sen District */
+.results-table th:nth-child(4),
+.results-table td:nth-child(4) {
+    width: 185px;
+    min-width: 150px;
+    max-width: 220px;
+    text-align: left;
     white-space: normal;
-
     overflow-wrap: break-word;
 }
 
@@ -845,6 +923,30 @@ def load_excel(path):
 
         return pd.read_excel(
             path
+        )
+
+    except Exception as error:
+
+        st.error(
+            f"Could not read "
+            f"{path.name}: "
+            f"{error}"
+        )
+
+        return None
+
+
+def load_csv(path):
+
+    if not path.exists():
+
+        return None
+
+    try:
+
+        return pd.read_csv(
+            path,
+            dtype=str,
         )
 
     except Exception as error:
@@ -1141,6 +1243,54 @@ def filter_results(
     return df.loc[
         mask
     ]
+
+
+# =========================================================
+# LATEST TIMESTAMP
+# =========================================================
+
+def latest_timestamp(values):
+
+    cleaned = []
+
+    for value in values:
+
+        if pd.isna(value):
+            continue
+
+        text = str(
+            value
+        ).strip()
+
+        if not text:
+            continue
+
+        cleaned.append(
+            text
+        )
+
+    if not cleaned:
+        return ""
+
+    parsed = pd.to_datetime(
+        pd.Series(
+            cleaned
+        ),
+        errors="coerce",
+    )
+
+    if parsed.notna().any():
+
+        latest_index = (
+            parsed
+            .idxmax()
+        )
+
+        return cleaned[
+            latest_index
+        ]
+
+    return cleaned[-1]
 
 
 # =========================================================
@@ -1442,6 +1592,7 @@ def clean_results(
     # =====================================================
 
     protected = {
+        "Last Updated",
         "Town",
         "Rep District",
         "Sen District",
@@ -1498,6 +1649,7 @@ def clean_results(
     # =====================================================
 
     text_columns = {
+        "Last Updated",
         "Town",
         "Rep District",
         "Sen District",
@@ -1551,7 +1703,13 @@ def clean_results(
             continue
 
 
-        if column in {
+        if column == "Last Updated":
+
+            aggregation[
+                column
+            ] = latest_timestamp
+
+        elif column in {
             "Rep District",
             "Sen District",
         }:
@@ -1616,6 +1774,7 @@ def clean_results(
     first_columns = [
         column
         for column in [
+            "Last Updated",
             "Town",
             "Rep District",
             "Sen District",
@@ -1672,15 +1831,55 @@ def clean_results(
     ]
 
 
-    display = (
-        display
-        .sort_values(
-            "Town"
+    # =====================================================
+    # MOST RECENT ACTUAL CHANGES FIRST
+    # =====================================================
+
+    if "Last Updated" in display.columns:
+
+        display[
+            "_last_updated_sort"
+        ] = pd.to_datetime(
+            display[
+                "Last Updated"
+            ],
+            errors="coerce",
         )
-        .reset_index(
-            drop=True
+
+        display = (
+            display
+            .sort_values(
+                [
+                    "_last_updated_sort",
+                    "Town",
+                ],
+                ascending=[
+                    False,
+                    True,
+                ],
+                na_position="last",
+            )
+            .drop(
+                columns=[
+                    "_last_updated_sort"
+                ]
+            )
+            .reset_index(
+                drop=True
+            )
         )
-    )
+
+    else:
+
+        display = (
+            display
+            .sort_values(
+                "Town"
+            )
+            .reset_index(
+                drop=True
+            )
+        )
 
 
     return display
@@ -1730,6 +1929,32 @@ def dataframe_html(
     if df is None:
 
         return ""
+
+
+    df = df.copy()
+
+    if "Last Updated" in df.columns:
+
+        df[
+            "Last Updated"
+        ] = (
+            df[
+                "Last Updated"
+            ]
+            .fillna("")
+            .astype(str)
+            .replace(
+                "",
+                "—",
+            )
+        )
+
+        df = df.rename(
+            columns={
+                "Last Updated":
+                    "Last Vote Change"
+            }
+        )
 
 
     if max_rows is not None:
@@ -1805,11 +2030,11 @@ def dataframe_html(
 # INITIAL FEDERAL DATA
 # =========================================================
 
-federal_dem = load_excel(
+federal_dem = load_csv(
     FEDERAL_DEM_FILE
 )
 
-federal_rep = load_excel(
+federal_rep = load_csv(
     FEDERAL_REP_FILE
 )
 
@@ -1873,18 +2098,50 @@ AP
 """
 
 
-current_time = (
-    datetime.now(
-        ZoneInfo("America/New_York")
-    )
-    .strftime(
-        "%m/%d/%Y %I:%M %p"
-    )
+@st.fragment(
+    run_every="30s"
 )
+def render_header():
 
+    header_status = load_status()
 
-st.html(
-    f"""
+    election_status = (
+        str(
+            header_status.get(
+                "election_status",
+                "UNOFFICIAL",
+            )
+        )
+        .strip()
+        .upper()
+    )
+
+    if not election_status:
+
+        election_status = (
+            "UNOFFICIAL"
+        )
+
+    status_class = (
+        "ap-unofficial"
+        if election_status
+        == "UNOFFICIAL"
+        else "ap-result-status"
+    )
+
+    current_time = (
+        datetime.now(
+            ZoneInfo(
+                "America/New_York"
+            )
+        )
+        .strftime(
+            "%m/%d/%Y %I:%M %p"
+        )
+    )
+
+    st.html(
+        f"""
 <div class="top-header">
 
 <div class="top-header-left">
@@ -1908,8 +2165,8 @@ Vermont Election Results
 
 <div class="ap-header-status">
 
-<span class="ap-unofficial">
-UNOFFICIAL
+<span class="{status_class}">
+{html.escape(election_status)}
 </span>
 
 <span class="ap-pipe">
@@ -1929,27 +2186,70 @@ Next update:
 
 </div>
 """
-)
+    )
 
 
-# =========================================================
-# GRID
-# =========================================================
-
-nav_col, main_col = st.columns(
-    [
-        1.3,
-        8.7,
-    ],
-    gap="small",
-)
+render_header()
 
 
 # =========================================================
 # NAVIGATION
 # =========================================================
 
-with nav_col:
+def render_navigation():
+
+    live_status = load_status()
+
+    federal_dem_nav = load_csv(
+        FEDERAL_DEM_FILE
+    )
+
+    federal_rep_nav = load_csv(
+        FEDERAL_REP_FILE
+    )
+
+    (
+        federal_dem_units,
+        federal_rep_units,
+        federal_overall_units,
+        federal_total_units,
+    ) = get_reporting_status(
+        live_status,
+        dem=federal_dem_nav,
+        rep=federal_rep_nav,
+        prefix="federal",
+    )
+
+    statewide_sidebar_units = int(
+        live_status.get(
+            "statewide_overall_reporting",
+            0,
+        )
+    )
+
+    statewide_sidebar_total = int(
+        live_status.get(
+            "statewide_total_units",
+            DEFAULT_TOTAL_UNITS,
+        )
+    )
+
+    statewide_sidebar = (
+        f"{statewide_sidebar_units} / "
+        f"{statewide_sidebar_total} RU"
+        if statewide_sidebar_units > 0
+        else "Not loaded"
+    )
+
+    last_checked = live_status.get(
+        "last_checked",
+        "Not available",
+    )
+
+    last_updated = live_status.get(
+        "last_updated",
+        "Not available",
+    )
 
     federal_active = (
         "nav-active"
@@ -1957,42 +2257,11 @@ with nav_col:
         else ""
     )
 
-
     statewide_active = (
         "nav-active"
         if section == "statewide"
         else ""
     )
-
-
-    sidebar_status = load_status()
-
-
-    statewide_sidebar_units = int(
-        sidebar_status.get(
-            "statewide_overall_reporting",
-            0,
-        )
-    )
-
-
-    statewide_sidebar_total = int(
-        sidebar_status.get(
-            "statewide_total_units",
-            DEFAULT_TOTAL_UNITS,
-        )
-    )
-
-
-    statewide_sidebar = (
-        f"{statewide_sidebar_units} / "
-        f"{statewide_sidebar_total} RU"
-
-        if statewide_sidebar_units > 0
-
-        else "Not loaded"
-    )
-
 
     st.html(
         f"""
@@ -2002,127 +2271,57 @@ with nav_col:
 Results
 </div>
 
-
-<a
-class="nav-link"
-href="?section=federal"
-target="_self"
->
-
-<div class="
-nav-row
-{federal_active}
-">
-
-<span class="dot-red">
-●
-</span>
-
+<a class="nav-link" href="?section=federal" target="_self">
+<div class="nav-row {federal_active}">
+<span class="dot-red">●</span>
 Federal
-
 </div>
-
 </a>
 
-
-<a
-class="nav-link"
-href="?section=statewide"
-target="_self"
->
-
-<div class="
-nav-row
-{statewide_active}
-">
-
-<span class="dot-white">
-●
-</span>
-
+<a class="nav-link" href="?section=statewide" target="_self">
+<div class="nav-row {statewide_active}">
+<span class="dot-white">●</span>
 Statewide
-
 </div>
-
 </a>
 
-
 <div class="nav-row">
-
-<span class="dot-white">
-●
-</span>
-
+<span class="dot-white">●</span>
 Senate
-
 </div>
-
 
 <div class="nav-row">
-
-<span class="dot-white">
-●
-</span>
-
+<span class="dot-white">●</span>
 House
-
 </div>
 
-
-<div class="nav-rule">
-</div>
-
+<div class="nav-rule"></div>
 
 <div class="nav-stat">
-
 Federal:
-
 <strong>
 {federal_overall_units} / {federal_total_units} RU
 </strong>
-
 </div>
 
-
 <div class="nav-stat">
-
 Statewide:
-
 <strong>
 {statewide_sidebar}
 </strong>
-
 </div>
 
-
 <div class="nav-stat">
-
 Senate:
-
-<strong>
-Not loaded
-</strong>
-
+<strong>Not loaded</strong>
 </div>
-
 
 <div class="nav-stat">
-
 House:
-
-<strong>
-Not loaded
-</strong>
-
+<strong>Not loaded</strong>
 </div>
 
-
-<div
-class="nav-rule"
-style="margin-top:150px;"
->
-</div>
-
+<div class="nav-rule" style="margin-top:150px;"></div>
 
 <div class="nav-bottom-label">
 Last checked
@@ -2132,7 +2331,6 @@ Last checked
 {html.escape(str(last_checked))}
 </div>
 
-
 <div class="nav-bottom-label">
 Last results update
 </div>
@@ -2141,19 +2339,13 @@ Last results update
 {html.escape(str(last_updated))}
 </div>
 
-
 <div class="nav-bottom-label">
 Auto-refresh
 </div>
 
 <div class="nav-bottom-value">
-
 every 30 seconds
-
-<span class="green-dot">
-●
-</span>
-
+<span class="green-dot">●</span>
 </div>
 
 </div>
@@ -2167,12 +2359,12 @@ every 30 seconds
 
 def render_federal():
 
-    dem = load_excel(
+    dem = load_csv(
         FEDERAL_DEM_FILE
     )
 
 
-    rep = load_excel(
+    rep = load_csv(
         FEDERAL_REP_FILE
     )
 
@@ -3178,24 +3370,162 @@ Reporting Units:
 
 
 # =========================================================
-# LIVE PAGE
+# BACKGROUND REFRESH
 # =========================================================
 
-with main_col:
+@st.cache_resource
+def get_refresh_state():
 
-    @st.fragment(
-        run_every="30s"
+    return {
+        "lock":
+            threading.Lock(),
+
+        "running":
+            False,
+
+        "last_started":
+            0.0,
+
+        "error":
+            None,
+    }
+
+
+def run_refresh_in_background(
+    state,
+):
+
+    try:
+
+        asyncio.run(
+            check_results()
+        )
+
+        error = None
+
+    except Exception as exc:
+
+        error = str(
+            exc
+        )
+
+    finally:
+
+        with state[
+            "lock"
+        ]:
+
+            state[
+                "running"
+            ] = False
+
+            state[
+                "error"
+            ] = error
+
+
+def trigger_background_refresh():
+
+    state = get_refresh_state()
+
+    now = time.monotonic()
+
+    with state[
+        "lock"
+    ]:
+
+        # Do not start a second request while one is still
+        # running, and do not start more often than every
+        # ~25 seconds even if Streamlit reruns for another
+        # reason such as a button click.
+
+        if state[
+            "running"
+        ]:
+
+            return
+
+        if (
+            now
+            - state[
+                "last_started"
+            ]
+            < 25
+        ):
+
+            return
+
+        state[
+            "running"
+        ] = True
+
+        state[
+            "last_started"
+        ] = now
+
+    thread = threading.Thread(
+        target=
+            run_refresh_in_background,
+
+        args=(
+            state,
+        ),
+
+        daemon=True,
     )
-    def live_page():
 
-        try:
-            asyncio.run(
-                check_results()
-            )
+    thread.start()
 
-        except Exception as error:
+
+def get_background_refresh_error():
+
+    state = get_refresh_state()
+
+    with state[
+        "lock"
+    ]:
+
+        return state.get(
+            "error"
+        )
+
+
+# =========================================================
+# LIVE DASHBOARD
+# =========================================================
+
+@st.fragment(
+    run_every="30s"
+)
+def live_dashboard():
+
+    # Start the network/file refresh in the background.
+    # The current UI remains visible while it runs.
+    trigger_background_refresh()
+
+    refresh_error = (
+        get_background_refresh_error()
+    )
+
+    nav_col, main_col = st.columns(
+        [
+            1.3,
+            8.7,
+        ],
+        gap="small",
+    )
+
+    with nav_col:
+
+        render_navigation()
+
+    with main_col:
+
+        if refresh_error:
+
             st.warning(
-                f"Could not refresh results: {error}"
+                f"Could not refresh results: "
+                f"{refresh_error}"
             )
 
         if section == "statewide":
@@ -3207,4 +3537,4 @@ with main_col:
             render_federal()
 
 
-    live_page()
+live_dashboard()
