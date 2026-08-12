@@ -6,7 +6,9 @@ from datetime import datetime
 import base64
 import html
 import json
+import asyncio
 
+from monitor import check_results
 import pandas as pd
 import streamlit as st
 
@@ -3182,6 +3184,16 @@ with main_col:
         run_every="30s"
     )
     def live_page():
+
+        try:
+            asyncio.run(
+                check_results()
+            )
+
+        except Exception as error:
+            st.warning(
+                f"Could not refresh results: {error}"
+            )
 
         if section == "statewide":
 
