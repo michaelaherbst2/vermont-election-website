@@ -3,8 +3,10 @@
 
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import asyncio
 import json
+
 
 import httpx
 import pandas as pd
@@ -143,7 +145,9 @@ for directory in [
 
 def now_string():
 
-    return datetime.now().strftime(
+    return datetime.now(
+        ZoneInfo("America/New_York")
+    ).strftime(
         "%m/%d/%Y %I:%M:%S %p"
     )
 

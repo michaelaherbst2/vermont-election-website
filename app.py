@@ -3,6 +3,7 @@
 
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import base64
 import html
 import json
@@ -1873,7 +1874,9 @@ AP
 
 
 current_time = (
-    datetime.now()
+    datetime.now(
+        ZoneInfo("America/New_York")
+    )
     .strftime(
         "%m/%d/%Y %I:%M %p"
     )
