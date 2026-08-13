@@ -1653,63 +1653,6 @@ def clean_results(
 
 
     # =====================================================
-    # REMOVE ZERO-ONLY CANDIDATES
-    # =====================================================
-
-    protected = {
-        "Last Updated",
-        "Town",
-        "Rep District",
-        "Sen District",
-        "Total Write Ins",
-        "Others",
-        "Total",
-    }
-
-
-    drop_columns = []
-
-
-    for column in display.columns:
-
-        if column in protected:
-
-            continue
-
-
-        numeric = pd.to_numeric(
-            display[
-                column
-            ],
-            errors="coerce",
-        )
-
-
-        if (
-            numeric.notna().any()
-
-            and
-
-            numeric
-            .fillna(0)
-            .sum()
-            == 0
-        ):
-
-            drop_columns.append(
-                column
-            )
-
-
-    if drop_columns:
-
-        display = display.drop(
-            columns=
-                drop_columns
-        )
-
-
-    # =====================================================
     # NUMERIC COLUMNS
     # =====================================================
 

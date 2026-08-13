@@ -17,9 +17,6 @@ import pandas as pd
 # =========================================================
 # SETTINGS
 # =========================================================
-NEW_YORK_TZ = ZoneInfo(
-    "America/New_York"
-)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -181,10 +178,15 @@ for directory in [
 
 def now_string():
 
-    return datetime.now(
-        NEW_YORK_TZ
-    ).strftime(
-        "%m/%d/%Y %I:%M:%S %p"
+    return (
+        datetime.now(
+            ZoneInfo(
+                "America/New_York"
+            )
+        )
+        .strftime(
+            "%m/%d/%Y %I:%M:%S %p"
+        )
     )
 
 
@@ -588,12 +590,12 @@ def source_time_to_eastern(value):
             )
         )
 
-        # If Vermont provides an actual timezone,
-        # convert it to New York time.
         if parsed.tzinfo is not None:
 
             parsed = parsed.astimezone(
-                NEW_YORK_TZ
+                ZoneInfo(
+                    "America/New_York"
+                )
             )
 
         return parsed.strftime(
@@ -602,12 +604,6 @@ def source_time_to_eastern(value):
 
     except Exception:
 
-        # Vermont currently gives some timestamps in
-        # display format such as:
-        #
-        # 08/13/2026 10:26 AM
-        #
-        # Leave those unchanged.
         return text
 
 
@@ -1435,59 +1431,6 @@ def build_statewide_office(
 
 
     # =====================================================
-    # REMOVE ZERO-ONLY CANDIDATES
-    # =====================================================
-
-    protected = {
-        "Town",
-        "Rep District",
-        "Sen District",
-        "Total Write Ins",
-        "Others",
-        "Total",
-    }
-
-
-    drop_columns = []
-
-
-    for column in df.columns:
-
-        if column in protected:
-            continue
-
-
-        numeric = pd.to_numeric(
-            df[
-                column
-            ],
-            errors="coerce",
-        )
-
-
-        if (
-            numeric.notna().any()
-            and
-            numeric
-            .fillna(0)
-            .sum()
-            == 0
-        ):
-
-            drop_columns.append(
-                column
-            )
-
-
-    if drop_columns:
-
-        df = df.drop(
-            columns=
-                drop_columns
-        )
-
-
-    # =====================================================
     # COLUMN ORDER
     # =====================================================
 
@@ -2076,48 +2019,6 @@ def build_federal_office(
                 aggregation
             )
         )
-
-        protected = {
-            "Town",
-            "Rep District",
-            "Sen District",
-            "Total Write Ins",
-            "Others",
-            "Total",
-        }
-
-        drop_columns = []
-
-        for column in df.columns:
-
-            if column in protected:
-                continue
-
-            numeric = pd.to_numeric(
-                df[
-                    column
-                ],
-                errors="coerce",
-            )
-
-            if (
-                numeric.notna().any()
-                and numeric
-                .fillna(0)
-                .sum()
-                == 0
-            ):
-
-                drop_columns.append(
-                    column
-                )
-
-        if drop_columns:
-
-            df = df.drop(
-                columns=
-                    drop_columns
-            )
 
         first_columns = [
             column
