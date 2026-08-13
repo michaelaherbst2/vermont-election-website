@@ -3,6 +3,7 @@
 
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import asyncio
 import hashlib
 import json
@@ -16,6 +17,9 @@ import pandas as pd
 # =========================================================
 # SETTINGS
 # =========================================================
+NEW_YORK_TZ = ZoneInfo(
+    "America/New_York"
+)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -177,9 +181,12 @@ for directory in [
 
 def now_string():
 
-    return datetime.now().strftime(
+    return datetime.now(
+        NEW_YORK_TZ
+    ).strftime(
         "%m/%d/%Y %I:%M:%S %p"
     )
+
 
 
 # =========================================================
@@ -383,11 +390,17 @@ def save_status(**updates):
 
 def load_ru_timestamps():
 
+    """
+    Load persistent per-town vote-change history.
+
+    History is preserved across app restarts and code updates.
+    """
+
     if not RU_TIMESTAMPS_FILE.exists():
 
         return {
             "_version":
-                RU_TIMESTAMP_HISTORY_VERSION
+                RU_TIMESTAMP_HISTORY_VERSION,
         }
 
     try:
@@ -400,26 +413,25 @@ def load_ru_timestamps():
 
         return {
             "_version":
-                RU_TIMESTAMP_HISTORY_VERSION
+                RU_TIMESTAMP_HISTORY_VERSION,
         }
 
-    # Reset older timestamp history once so the current
-    # snapshot becomes a baseline instead of making every
-    # reporting town look newly updated.
-
-    if (
-        data.get(
-            "_version"
-        )
-        != RU_TIMESTAMP_HISTORY_VERSION
+    if not isinstance(
+        data,
+        dict,
     ):
 
         return {
             "_version":
-                RU_TIMESTAMP_HISTORY_VERSION
+                RU_TIMESTAMP_HISTORY_VERSION,
         }
 
+    data[
+        "_version"
+    ] = RU_TIMESTAMP_HISTORY_VERSION
+
     return data
+
 
 
 def save_ru_timestamps(data):
@@ -444,15 +456,13 @@ def save_ru_timestamps(data):
 def row_signature(row):
 
     """
-    Produce a stable signature for an RU.
+    JSON-stable signature of vote/count values only.
 
-    Last Updated is intentionally excluded so that the
-    timestamp itself does not make every row appear changed.
+    A new Last Vote Change is recorded only when a numeric
+    result value changes for that town.
     """
 
-    clean = {}
-
-    ignored_signature_fields = {
+    ignored_fields = {
         "Last Updated",
         "Town",
         "Rep District",
@@ -465,45 +475,39 @@ def row_signature(row):
         "timestamp",
     }
 
+    signature = []
+
     for key, value in row.items():
 
-        if str(key) in ignored_signature_fields:
+        if key in ignored_fields:
             continue
 
         if pd.isna(value):
-            value = None
+            continue
 
-        elif hasattr(
-            value,
-            "item",
-        ):
+        try:
 
-            try:
-                value = value.item()
+            number = float(
+                str(value)
+                .strip()
+                .replace(
+                    ",",
+                    "",
+                )
+            )
 
-            except Exception:
-                pass
+        except Exception:
+            continue
 
-        clean[
-            str(key)
-        ] = value
-
-    payload = json.dumps(
-        clean,
-        sort_keys=True,
-        default=str,
-    )
-
-    return hashlib.sha256(
-        payload.encode(
-            "utf-8"
+        signature.append(
+            [
+                str(key),
+                number,
+            ]
         )
-    ).hexdigest()
 
+    return signature
 
-# =========================================================
-# DOES THIS RU ACTUALLY HAVE RESULTS?
-# =========================================================
 
 def row_is_reporting(row):
 
@@ -560,6 +564,54 @@ def row_is_reporting(row):
 
 
 # =========================================================
+# SOURCE TIME TO EASTERN
+# =========================================================
+
+def source_time_to_eastern(value):
+
+    if value is None:
+        return ""
+
+    text = str(
+        value
+    ).strip()
+
+    if not text:
+        return ""
+
+    try:
+
+        parsed = datetime.fromisoformat(
+            text.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+
+        # If Vermont provides an actual timezone,
+        # convert it to New York time.
+        if parsed.tzinfo is not None:
+
+            parsed = parsed.astimezone(
+                NEW_YORK_TZ
+            )
+
+        return parsed.strftime(
+            "%m/%d/%Y %I:%M:%S %p"
+        )
+
+    except Exception:
+
+        # Vermont currently gives some timestamps in
+        # display format such as:
+        #
+        # 08/13/2026 10:26 AM
+        #
+        # Leave those unchanged.
+        return text
+
+
+# =========================================================
 # SOURCE RU TIMESTAMP
 # =========================================================
 
@@ -599,7 +651,9 @@ def get_source_ru_timestamp(row):
             text
             and text.casefold() != "nan"
         ):
-            return text
+            return source_time_to_eastern(
+                text
+            )
 
     return ""
 
@@ -700,6 +754,10 @@ def add_ru_timestamps(
 
         if previous is None:
 
+            # First observation = baseline timestamp.
+            # Vermont does not provide a historical per-town
+            # change time, so use the overall source update time
+            # (or observed time) once.
             section_history[
                 town
             ] = {
@@ -708,12 +766,8 @@ def add_ru_timestamps(
 
                 "last_updated":
                     (
-                        (
-                            source_changed_at
-                            or baseline_at
-                        )
-                        if reporting
-                        else ""
+                        baseline_at
+                        or observed_at
                     ),
 
                 "reporting":
@@ -732,6 +786,9 @@ def add_ru_timestamps(
             != signature
         ):
 
+            # A real numeric vote/count difference was observed.
+            # Only this town gets a new timestamp.
+
             previous_reporting = bool(
                 previous.get(
                     "reporting",
@@ -744,10 +801,9 @@ def add_ru_timestamps(
                 or previous_reporting
             ):
 
-                changed_at = (
-                    source_changed_at
-                    or observed_at
-                )
+                # This is the exact poll when OUR monitor first
+                # observed this town's vote/count values change.
+                changed_at = observed_at
 
             else:
 
@@ -771,6 +827,16 @@ def add_ru_timestamps(
                     reporting,
             }
 
+            print(
+                "VOTE CHANGE:",
+                category,
+                party,
+                office,
+                town,
+                "->",
+                changed_at,
+            )
+
 
         # -------------------------------------------------
         # NO CHANGE = KEEP PREVIOUS TIME
@@ -778,11 +844,30 @@ def add_ru_timestamps(
 
         else:
 
+            # No vote/result change:
+            # preserve this town's existing Last Vote Change.
             section_history[
                 town
             ][
                 "reporting"
             ] = reporting
+
+            # Only backfill genuinely blank legacy rows once.
+            if not section_history[
+                town
+            ].get(
+                "last_updated"
+            ):
+
+                section_history[
+                    town
+                ][
+                    "last_updated"
+                ] = (
+                    source_changed_at
+                    or baseline_at
+                    or observed_at
+                )
 
 
         timestamps.append(
@@ -2304,153 +2389,51 @@ def process_federal_json(
 
             continue
 
-        wrote = finalize_result_dataframe(
+        df = add_ru_timestamps(
             df,
             category="federal",
             party=party_key,
             office="REPRESENTATIVE TO CONGRESS",
             observed_at=observed_at,
             baseline_at=baseline_at,
-            output_file=output_file,
-            output_format="csv",
         )
 
+        if "_source_last_updated" in df.columns:
 
-        if wrote:
+            df = df.drop(
+                columns=[
+                    "_source_last_updated"
+                ]
+            )
 
-            created += 1
-
-    return created
-
-
-# =========================================================
-# SHARED RESULT FINALIZATION
-# =========================================================
-
-def finalize_result_dataframe(
-    df,
-    category,
-    party,
-    office,
-    observed_at,
-    baseline_at,
-    output_file,
-    output_format="csv",
-):
-
-    """
-    Shared finalization for:
-      - Federal Democratic
-      - Federal Republican
-      - Statewide Democratic
-      - Statewide Republican
-
-    Rules:
-      1. Every reporting town gets an initial baseline timestamp.
-      2. Later vote changes get a newer timestamp.
-      3. Unchanged towns keep their prior timestamp.
-      4. Newest Last Vote Change sorts to the top.
-      5. Summary/aggregate rows are excluded before display.
-    """
-
-    if (
-        df is None
-        or df.empty
-        or "Town" not in df.columns
-    ):
-
-        return False
-
-
-    output = df.copy()
-
-
-    output[
-        "Town"
-    ] = (
-        output[
-            "Town"
-        ]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-    )
-
-
-    output = output[
-        ~output[
-            "Town"
-        ]
-        .apply(
-            is_summary_reporting_unit
-        )
-    ].copy()
-
-
-    if output.empty:
-
-        return False
-
-
-    output = add_ru_timestamps(
-        output,
-        category=category,
-        party=party,
-        office=office,
-        observed_at=observed_at,
-        baseline_at=baseline_at,
-    )
-
-
-    if "_source_last_updated" in output.columns:
-
-        output = output.drop(
-            columns=[
-                "_source_last_updated"
-            ]
+        df = sort_by_last_updated(
+            df
         )
 
-
-    output = sort_by_last_updated(
-        output
-    )
-
-
-    output = order_timestamp_column(
-        output
-    )
-
-
-    if output_format == "csv":
+        df = order_timestamp_column(
+            df
+        )
 
         atomic_to_csv(
-            output,
+            df,
             output_file,
         )
 
-    else:
-
-        atomic_to_excel(
-            output,
+        print(
+            "Created live Federal CSV:",
             output_file,
         )
 
+        print(
+            "Rows:",
+            len(
+                df
+            ),
+        )
 
-    print(
-        "Created:",
-        output_file,
-    )
+        created += 1
 
-
-    print(
-        "Rows:",
-        len(
-            output
-        ),
-    )
-
-
-    return True
+    return created
 
 
 # =========================================================
@@ -2574,6 +2557,46 @@ def process_statewide_json(
                 continue
 
 
+            # =============================================
+            # ADD PER-RU OBSERVED CHANGE TIMESTAMP
+            # =============================================
+
+            df = add_ru_timestamps(
+                df,
+                category="statewide",
+                party=party_key,
+                office=office_name,
+                observed_at=observed_at,
+                baseline_at=baseline_at,
+            )
+
+
+            # =============================================
+            # MOST RECENT RU FIRST
+            # =============================================
+
+            if "_source_last_updated" in df.columns:
+
+                df = df.drop(
+                    columns=[
+                        "_source_last_updated"
+                    ]
+                )
+
+            df = sort_by_last_updated(
+                df
+            )
+
+
+            # =============================================
+            # SHOW TIMESTAMP FIRST
+            # =============================================
+
+            df = order_timestamp_column(
+                df
+            )
+
+
             output_file = (
                 STATEWIDE_FILES[
                     office_name
@@ -2583,21 +2606,27 @@ def process_statewide_json(
             )
 
 
-            wrote = finalize_result_dataframe(
+            atomic_to_excel(
                 df,
-                category="statewide",
-                party=party_key,
-                office=office_name,
-                observed_at=observed_at,
-                baseline_at=baseline_at,
-                output_file=output_file,
-                output_format="excel",
+                output_file,
             )
 
 
-            if wrote:
+            created += 1
 
-                created += 1
+
+            print(
+                "Created:",
+                output_file,
+            )
+
+
+            print(
+                "Rows:",
+                len(
+                    df
+                ),
+            )
 
 
     return created
@@ -2819,8 +2848,10 @@ async def check_results():
 
 
         vermont_last_updated = (
-            manifest.get(
-                "lastUpdatedDate"
+            source_time_to_eastern(
+                manifest.get(
+                    "lastUpdatedDate"
+                )
             )
         )
 

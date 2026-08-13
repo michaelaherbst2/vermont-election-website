@@ -19,6 +19,9 @@ import streamlit as st
 # =========================================================
 # SETTINGS
 # =========================================================
+NEW_YORK_TZ = ZoneInfo(
+    "America/New_York"
+)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -51,6 +54,8 @@ DEFAULT_TOTAL_UNITS = 247
 
 ELECTION_NAME = "2026 Vermont Primary Election"
 ELECTION_DATE_DISPLAY = "August 11, 2026"
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 # =========================================================
@@ -902,6 +907,66 @@ div[data-testid="stButton"] button {
     font-size: 13px !important;
 
     font-weight: 600 !important;
+}
+
+
+
+/* =====================================================
+   STATEWIDE OFFICE SELECT — WHITE OUTLINE + WHITE ARROW
+   ===================================================== */
+
+/* Closed select box */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+    background: #050606 !important;
+    border: 1px solid #ffffff !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+}
+
+/* Keep white outline while focused/open */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
+    border: 1px solid #ffffff !important;
+    box-shadow: none !important;
+}
+
+/* Selected office text */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Dropdown arrow */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {
+    fill: #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* Open dropdown/popover outer box */
+div[data-baseweb="popover"] > div {
+    background: #050606 !important;
+    border: 1px solid #ffffff !important;
+    box-shadow: none !important;
+}
+
+/* Open dropdown menu */
+div[data-baseweb="menu"] {
+    background: #050606 !important;
+    border: 1px solid #ffffff !important;
+    border-radius: 8px !important;
+}
+
+/* Dropdown option text */
+div[data-baseweb="menu"] li,
+div[data-baseweb="menu"] li span {
+    color: #ffffff !important;
+}
+
+/* Selected / hovered option */
+div[data-baseweb="menu"] li[aria-selected="true"],
+div[data-baseweb="menu"] li:hover {
+    background: #181818 !important;
+    color: #ffffff !important;
 }
 
 </style>
@@ -1886,6 +1951,91 @@ def clean_results(
 
 
 # =========================================================
+# EASTERN TIME DISPLAY
+# =========================================================
+
+def format_eastern_timestamp(value):
+
+    """
+    Display timestamps in Eastern Time.
+
+    Important:
+    - Existing strings like "08/12/2026 04:59:14 PM"
+      are already Eastern and must NOT be converted again.
+    - ISO/UTC strings like "2026-08-12T20:59:14Z"
+      are converted to America/New_York.
+    """
+
+    if value is None:
+        return "—"
+
+    text = str(
+        value
+    ).strip()
+
+    if (
+        not text
+        or text == "—"
+        or text.casefold() == "nan"
+    ):
+        return "—"
+
+
+    # -------------------------------------------------
+    # ALREADY EASTERN DISPLAY FORMAT
+    # -------------------------------------------------
+
+    for fmt in [
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y %I:%M %p",
+    ]:
+
+        try:
+
+            parsed = datetime.strptime(
+                text,
+                fmt,
+            )
+
+            return parsed.strftime(
+                "%m/%d/%Y %I:%M %p"
+            )
+
+        except Exception:
+
+            continue
+
+
+    # -------------------------------------------------
+    # TRUE UTC / TIMEZONE-AWARE SOURCE
+    # -------------------------------------------------
+
+    try:
+
+        parsed = pd.to_datetime(
+            text,
+            utc=True,
+        )
+
+        if pd.isna(
+            parsed
+        ):
+            return text
+
+        eastern = parsed.tz_convert(
+            EASTERN
+        )
+
+        return eastern.strftime(
+            "%m/%d/%Y %I:%M %p"
+        )
+
+    except Exception:
+
+        return text
+
+
+# =========================================================
 # TABLE HTML
 # =========================================================
 
@@ -1941,11 +2091,8 @@ def dataframe_html(
             df[
                 "Last Updated"
             ]
-            .fillna("")
-            .astype(str)
-            .replace(
-                "",
-                "—",
+            .apply(
+                format_eastern_timestamp
             )
         )
 
@@ -2130,15 +2277,13 @@ def render_header():
     )
 
     current_time = (
-        datetime.now(
-            ZoneInfo(
-                "America/New_York"
-            )
-        )
-        .strftime(
-            "%m/%d/%Y %I:%M %p"
-        )
+    datetime.now(
+        NEW_YORK_TZ
     )
+    .strftime(
+        "%m/%d/%Y %I:%M %p"
+    )
+)
 
     st.html(
         f"""
@@ -2241,14 +2386,16 @@ def render_navigation():
         else "Not loaded"
     )
 
-    last_checked = live_status.get(
-        "last_checked",
-        "Not available",
+    last_checked = format_eastern_timestamp(
+        live_status.get(
+            "last_checked"
+        )
     )
 
-    last_updated = live_status.get(
-        "last_updated",
-        "Not available",
+    last_updated = format_eastern_timestamp(
+        live_status.get(
+            "last_updated"
+        )
     )
 
     federal_active = (
@@ -2385,15 +2532,17 @@ def render_federal():
     )
 
 
-    live_last_checked = live_status.get(
-        "last_checked",
-        "Not available",
+    live_last_checked = format_eastern_timestamp(
+        live_status.get(
+            "last_checked"
+        )
     )
 
 
-    live_last_updated = live_status.get(
-        "last_updated",
-        "Not available",
+    live_last_updated = format_eastern_timestamp(
+        live_status.get(
+            "last_updated"
+        )
     )
 
 
@@ -2930,15 +3079,17 @@ SELECT OFFICE
     )
 
 
-    live_last_checked = live_status.get(
-        "last_checked",
-        "Not available",
+    live_last_checked = format_eastern_timestamp(
+        live_status.get(
+            "last_checked"
+        )
     )
 
 
-    live_last_updated = live_status.get(
-        "last_updated",
-        "Not available",
+    live_last_updated = format_eastern_timestamp(
+        live_status.get(
+            "last_updated"
+        )
     )
 
 
