@@ -1191,6 +1191,11 @@ def build_statewide_office(
         # REGULAR CANDIDATES
         # =================================================
 
+        # Vermont can expose OTHER WRITE-IN as a regular
+        # candidate row in rc instead of inside wc. Start the
+        # write-in total here so those votes are included too.
+        total_write_ins = 0
+
         regular_candidates = (
             town_block.get(
                 "rc",
@@ -1236,12 +1241,15 @@ def build_statewide_office(
                 + votes
             )
 
+            # OTHER WRITE-IN is sometimes sent by Vermont as
+            # a regular candidate. Include it in Total Write Ins.
+            if candidate_name == "OTHER WRITE-IN":
+                total_write_ins += votes
+
 
         # =================================================
         # WRITE-INS
         # =================================================
-
-        total_write_ins = 0
 
 
         write_ins = (
@@ -1785,6 +1793,13 @@ def build_federal_office(
             "rep": False,
         }
 
+        # Track OTHER WRITE-IN separately for each party.
+        # Vermont can place it in rc/candidates rather than wc.
+        other_write_ins_by_party = {
+            "dem": 0,
+            "rep": 0,
+        }
+
         regular_candidates = (
             town_block.get(
                 "rc",
@@ -1865,6 +1880,13 @@ def build_federal_office(
                 party_key
             ] = True
 
+            # Include Vermont's separate OTHER WRITE-IN
+            # candidate in this party's Total Write Ins.
+            if candidate_name == "OTHER WRITE-IN":
+                other_write_ins_by_party[
+                    party_key
+                ] += votes
+
         # Some Federal payloads put write-ins at the town level.
         write_ins = (
             town_block.get(
@@ -1874,7 +1896,7 @@ def build_federal_office(
             or []
         )
 
-        total_write_ins = sum(
+        wc_write_ins = sum(
             safe_int(
                 item.get(
                     "vc",
@@ -1919,7 +1941,12 @@ def build_federal_office(
                 party_key
             ][
                 "Total Write Ins"
-            ] = total_write_ins
+            ] = (
+                wc_write_ins
+                + other_write_ins_by_party[
+                    party_key
+                ]
+            )
 
             if source_total is not None:
 

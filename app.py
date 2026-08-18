@@ -8,8 +8,6 @@ import base64
 import html
 import json
 import asyncio
-import threading
-import time
 
 from monitor import check_results
 import pandas as pd
@@ -19,9 +17,6 @@ import streamlit as st
 # =========================================================
 # SETTINGS
 # =========================================================
-NEW_YORK_TZ = ZoneInfo(
-    "America/New_York"
-)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -54,8 +49,6 @@ DEFAULT_TOTAL_UNITS = 247
 
 ELECTION_NAME = "2026 Vermont Primary Election"
 ELECTION_DATE_DISPLAY = "August 11, 2026"
-
-EASTERN = ZoneInfo("America/New_York")
 
 
 # =========================================================
@@ -303,11 +296,6 @@ body,
 
 .ap-unofficial {
     color: #ff4048;
-    font-weight: 800;
-}
-
-.ap-result-status {
-    color: #2fda61;
     font-weight: 800;
 }
 
@@ -590,6 +578,7 @@ body,
 .office-label {
     color: #bbbbbb;
     font-size: 12px;
+
     margin-top: 4px;
     margin-bottom: 5px;
 }
@@ -598,66 +587,14 @@ body,
     max-width: 430px;
 }
 
-/* Closed selectbox */
-[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+[data-testid="stSelectbox"] > div > div {
     background: #080909 !important;
-    border-color: #3a3a3a !important;
-    color: #ffffff !important;
+
+    border: 1px solid #3a3a3a !important;
+
+    border-radius: 5px !important;
 }
 
-/* Selected office text */
-[data-testid="stSelectbox"] div[data-baseweb="select"] span {
-    color: #ffffff !important;
-}
-
-/* Dropdown arrow */
-/* Dropdown arrow — black */
-[data-testid="stSelectbox"] svg {
-    fill: #000000 !important;
-    color: #000000 !important;
-}
-
-/* Open dropdown */
-div[data-baseweb="popover"] {
-    background: #080909 !important;
-}
-
-div[data-baseweb="popover"] > div {
-    background: #080909 !important;
-}
-
-/* Dropdown list */
-ul[role="listbox"] {
-    background: #080909 !important;
-}
-
-/* Every office option */
-li[role="option"] {
-    background: #080909 !important;
-    color: #ffffff !important;
-}
-
-/* Text inside options */
-li[role="option"] * {
-    color: #ffffff !important;
-}
-
-/* Hovered option */
-li[role="option"]:hover {
-    background: #181818 !important;
-    color: #ffffff !important;
-}
-
-/* Currently selected option */
-li[role="option"][aria-selected="true"] {
-    background: #202020 !important;
-    color: #ffffff !important;
-}
-
-/* Keep selected option text white */
-li[role="option"][aria-selected="true"] * {
-    color: #ffffff !important;
-}
 
 /* =====================================================
    RESULT CARD
@@ -826,57 +763,37 @@ li[role="option"][aria-selected="true"] * {
     text-align: right;
 }
 
-.results-table td:nth-child(1),
-.results-table td:nth-child(2),
-.results-table td:nth-child(3),
-.results-table td:nth-child(4) {
-    text-align: left;
-}
-
 
 /* =====================================================
    COLUMN WIDTHS
    ===================================================== */
 
-/* Last Updated */
 .results-table th:nth-child(1),
 .results-table td:nth-child(1) {
-    width: 220px;
-    min-width: 220px;
-    max-width: 220px;
-    text-align: left;
-    white-space: nowrap;
+    width: 145px;
+    min-width: 120px;
+    max-width: 160px;
 }
 
-/* Town */
 .results-table th:nth-child(2),
 .results-table td:nth-child(2) {
-    width: 165px;
-    min-width: 145px;
-    max-width: 180px;
-    text-align: left;
-    white-space: nowrap;
-}
+    width: 170px;
+    min-width: 135px;
+    max-width: 170px;
 
-/* Rep District */
-.results-table th:nth-child(3),
-.results-table td:nth-child(3) {
-    width: 185px;
-    min-width: 150px;
-    max-width: 210px;
-    text-align: left;
     white-space: normal;
+
     overflow-wrap: break-word;
 }
 
-/* Sen District */
-.results-table th:nth-child(4),
-.results-table td:nth-child(4) {
-    width: 185px;
-    min-width: 150px;
-    max-width: 220px;
-    text-align: left;
+.results-table th:nth-child(3),
+.results-table td:nth-child(3) {
+    width: 130px;
+    min-width: 110px;
+    max-width: 130px;
+
     white-space: normal;
+
     overflow-wrap: break-word;
 }
 
@@ -907,66 +824,6 @@ div[data-testid="stButton"] button {
     font-size: 13px !important;
 
     font-weight: 600 !important;
-}
-
-
-
-/* =====================================================
-   STATEWIDE OFFICE SELECT — WHITE OUTLINE + WHITE ARROW
-   ===================================================== */
-
-/* Closed select box */
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-    background: #050606 !important;
-    border: 1px solid #ffffff !important;
-    color: #ffffff !important;
-    box-shadow: none !important;
-}
-
-/* Keep white outline while focused/open */
-div[data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
-    border: 1px solid #ffffff !important;
-    box-shadow: none !important;
-}
-
-/* Selected office text */
-div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-div[data-testid="stSelectbox"] div[data-baseweb="select"] input {
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-}
-
-/* Dropdown arrow */
-div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {
-    fill: #ffffff !important;
-    color: #ffffff !important;
-}
-
-/* Open dropdown/popover outer box */
-div[data-baseweb="popover"] > div {
-    background: #050606 !important;
-    border: 1px solid #ffffff !important;
-    box-shadow: none !important;
-}
-
-/* Open dropdown menu */
-div[data-baseweb="menu"] {
-    background: #050606 !important;
-    border: 1px solid #ffffff !important;
-    border-radius: 8px !important;
-}
-
-/* Dropdown option text */
-div[data-baseweb="menu"] li,
-div[data-baseweb="menu"] li span {
-    color: #ffffff !important;
-}
-
-/* Selected / hovered option */
-div[data-baseweb="menu"] li[aria-selected="true"],
-div[data-baseweb="menu"] li:hover {
-    background: #181818 !important;
-    color: #ffffff !important;
 }
 
 </style>
@@ -1311,54 +1168,6 @@ def filter_results(
 
 
 # =========================================================
-# LATEST TIMESTAMP
-# =========================================================
-
-def latest_timestamp(values):
-
-    cleaned = []
-
-    for value in values:
-
-        if pd.isna(value):
-            continue
-
-        text = str(
-            value
-        ).strip()
-
-        if not text:
-            continue
-
-        cleaned.append(
-            text
-        )
-
-    if not cleaned:
-        return ""
-
-    parsed = pd.to_datetime(
-        pd.Series(
-            cleaned
-        ),
-        errors="coerce",
-    )
-
-    if parsed.notna().any():
-
-        latest_index = (
-            parsed
-            .idxmax()
-        )
-
-        return cleaned[
-            latest_index
-        ]
-
-    return cleaned[-1]
-
-
-# =========================================================
 # UNIQUE TEXT
 # =========================================================
 
@@ -1467,6 +1276,74 @@ def clean_results(
 
 
     # =====================================================
+    # TOTAL
+    #
+    # Vermont's source total can include blank ballots.
+    # For raw/legacy files that still contain Blank Votes,
+    # show the nonblank total: Total Votes - Blank Votes.
+    # Monitor-generated files already write this adjusted
+    # value directly as Total and do not need subtraction.
+    # =====================================================
+
+    if (
+        "Total"
+        not in display.columns
+        and "Total Votes" in display.columns
+    ):
+
+        total_values = (
+            pd.to_numeric(
+                display[
+                    "Total Votes"
+                ],
+                errors="coerce",
+            )
+            .fillna(0)
+        )
+
+        if "Blank Votes" in display.columns:
+            blank_values = (
+                pd.to_numeric(
+                    display[
+                        "Blank Votes"
+                    ],
+                    errors="coerce",
+                )
+                .fillna(0)
+            )
+
+            total_values = (
+                total_values
+                - blank_values
+            ).clip(lower=0)
+
+        display[
+            "Total"
+        ] = (
+            total_values
+            .fillna(0)
+            .astype(int)
+        )
+
+        display = display.drop(
+            columns=[
+                "Total Votes"
+            ]
+        )
+
+    elif (
+        "Total" in display.columns
+        and "Total Votes" in display.columns
+    ):
+
+        display = display.drop(
+            columns=[
+                "Total Votes"
+            ]
+        )
+
+
+    # =====================================================
     # DROP UNWANTED
     # =====================================================
 
@@ -1485,43 +1362,24 @@ def clean_results(
     # =====================================================
     # TOTAL WRITE INS
     #
-    # IMPORTANT:
-    # Do NOT include the already-created
-    # "Total Write Ins" field in write_in_columns.
+    # The monitor's Total Write Ins is authoritative.  It is
+    # already the sum of Vermont's wc rows, including the
+    # OTHER WRITE-IN row.  Do not add individual write-in
+    # columns to it again.  Only calculate a total when a
+    # legacy file has no Total Write Ins column.
     # =====================================================
-
-    existing_total_write_ins = None
-
-
-    if "Total Write Ins" in display.columns:
-
-        existing_total_write_ins = (
-            pd.to_numeric(
-                display[
-                    "Total Write Ins"
-                ],
-                errors="coerce",
-            )
-            .fillna(0)
-        )
-
 
     write_in_columns = [
         column
         for column in display.columns
         if (
             column != "Total Write Ins"
-
-            and
-
-            (
+            and (
                 "write-in"
                 in str(
                     column
                 ).casefold()
-
                 or
-
                 "write in"
                 in str(
                     column
@@ -1530,15 +1388,28 @@ def clean_results(
         )
     ]
 
+    if "Total Write Ins" in display.columns:
 
-    if write_in_columns:
+        display[
+            "Total Write Ins"
+        ] = (
+            pd.to_numeric(
+                display[
+                    "Total Write Ins"
+                ],
+                errors="coerce",
+            )
+            .fillna(0)
+            .astype(int)
+        )
+
+    elif write_in_columns:
 
         calculated_write_ins = pd.Series(
             0,
             index=display.index,
             dtype="float64",
         )
-
 
         for column in write_in_columns:
 
@@ -1552,14 +1423,6 @@ def clean_results(
                 .fillna(0)
             )
 
-
-        if existing_total_write_ins is not None:
-
-            calculated_write_ins += (
-                existing_total_write_ins
-            )
-
-
         display[
             "Total Write Ins"
         ] = (
@@ -1568,29 +1431,16 @@ def clean_results(
             .astype(int)
         )
 
-
-        display = display.drop(
-            columns=
-                write_in_columns
-        )
-
-
-    elif existing_total_write_ins is not None:
-
-        display[
-            "Total Write Ins"
-        ] = (
-            existing_total_write_ins
-            .fillna(0)
-            .astype(int)
-        )
-
-
     else:
 
         display[
             "Total Write Ins"
         ] = 0
+
+    if write_in_columns:
+        display = display.drop(
+            columns=write_in_columns
+        )
 
 
     # =====================================================
@@ -1614,41 +1464,59 @@ def clean_results(
 
 
     # =====================================================
-    # TOTAL
+    # REMOVE ZERO-ONLY CANDIDATES
     # =====================================================
 
-    if (
-        "Total"
-        not in display.columns
+    protected = {
+        "Last Updated",
+        "Town",
+        "Rep District",
+        "Sen District",
+        "Total Write Ins",
+        "Others",
+        "Total",
+    }
 
-        and
 
-        "Total Votes"
-        in display.columns
-    ):
+    drop_columns = []
 
-        display = display.rename(
-            columns={
-                "Total Votes":
-                    "Total"
-            }
+
+    for column in display.columns:
+
+        if column in protected:
+
+            continue
+
+
+        numeric = pd.to_numeric(
+            display[
+                column
+            ],
+            errors="coerce",
         )
 
 
-    elif (
-        "Total"
-        in display.columns
+        if (
+            numeric.notna().any()
 
-        and
+            and
 
-        "Total Votes"
-        in display.columns
-    ):
+            numeric
+            .fillna(0)
+            .sum()
+            == 0
+        ):
+
+            drop_columns.append(
+                column
+            )
+
+
+    if drop_columns:
 
         display = display.drop(
-            columns=[
-                "Total Votes"
-            ]
+            columns=
+                drop_columns
         )
 
 
@@ -1711,13 +1579,8 @@ def clean_results(
             continue
 
 
-        if column == "Last Updated":
-
-            aggregation[
-                column
-            ] = latest_timestamp
-
-        elif column in {
+        if column in {
+            "Last Updated",
             "Rep District",
             "Sen District",
         }:
@@ -1839,143 +1702,18 @@ def clean_results(
     ]
 
 
-    # =====================================================
-    # MOST RECENT ACTUAL CHANGES FIRST
-    # =====================================================
-
-    if "Last Updated" in display.columns:
-
-        display[
-            "_last_updated_sort"
-        ] = pd.to_datetime(
-            display[
-                "Last Updated"
-            ],
-            errors="coerce",
+    display = (
+        display
+        .sort_values(
+            "Town"
         )
-
-        display = (
-            display
-            .sort_values(
-                [
-                    "_last_updated_sort",
-                    "Town",
-                ],
-                ascending=[
-                    False,
-                    True,
-                ],
-                na_position="last",
-            )
-            .drop(
-                columns=[
-                    "_last_updated_sort"
-                ]
-            )
-            .reset_index(
-                drop=True
-            )
+        .reset_index(
+            drop=True
         )
-
-    else:
-
-        display = (
-            display
-            .sort_values(
-                "Town"
-            )
-            .reset_index(
-                drop=True
-            )
-        )
+    )
 
 
     return display
-
-
-# =========================================================
-# EASTERN TIME DISPLAY
-# =========================================================
-
-def format_eastern_timestamp(value):
-
-    """
-    Display timestamps in Eastern Time.
-
-    Important:
-    - Existing strings like "08/12/2026 04:59:14 PM"
-      are already Eastern and must NOT be converted again.
-    - ISO/UTC strings like "2026-08-12T20:59:14Z"
-      are converted to America/New_York.
-    """
-
-    if value is None:
-        return "—"
-
-    text = str(
-        value
-    ).strip()
-
-    if (
-        not text
-        or text == "—"
-        or text.casefold() == "nan"
-    ):
-        return "—"
-
-
-    # -------------------------------------------------
-    # ALREADY EASTERN DISPLAY FORMAT
-    # -------------------------------------------------
-
-    for fmt in [
-        "%m/%d/%Y %I:%M:%S %p",
-        "%m/%d/%Y %I:%M %p",
-    ]:
-
-        try:
-
-            parsed = datetime.strptime(
-                text,
-                fmt,
-            )
-
-            return parsed.strftime(
-                "%m/%d/%Y %I:%M %p"
-            )
-
-        except Exception:
-
-            continue
-
-
-    # -------------------------------------------------
-    # TRUE UTC / TIMEZONE-AWARE SOURCE
-    # -------------------------------------------------
-
-    try:
-
-        parsed = pd.to_datetime(
-            text,
-            utc=True,
-        )
-
-        if pd.isna(
-            parsed
-        ):
-            return text
-
-        eastern = parsed.tz_convert(
-            EASTERN
-        )
-
-        return eastern.strftime(
-            "%m/%d/%Y %I:%M %p"
-        )
-
-    except Exception:
-
-        return text
 
 
 # =========================================================
@@ -2022,29 +1760,6 @@ def dataframe_html(
     if df is None:
 
         return ""
-
-
-    df = df.copy()
-
-    if "Last Updated" in df.columns:
-
-        df[
-            "Last Updated"
-        ] = (
-            df[
-                "Last Updated"
-            ]
-            .apply(
-                format_eastern_timestamp
-            )
-        )
-
-        df = df.rename(
-            columns={
-                "Last Updated":
-                    "Last Vote Change"
-            }
-        )
 
 
     if max_rows is not None:
@@ -2188,48 +1903,18 @@ AP
 """
 
 
-@st.fragment(
-    run_every="30s"
-)
-def render_header():
-
-    header_status = load_status()
-
-    election_status = (
-        str(
-            header_status.get(
-                "election_status",
-                "UNOFFICIAL",
-            )
-        )
-        .strip()
-        .upper()
-    )
-
-    if not election_status:
-
-        election_status = (
-            "UNOFFICIAL"
-        )
-
-    status_class = (
-        "ap-unofficial"
-        if election_status
-        == "UNOFFICIAL"
-        else "ap-result-status"
-    )
-
-    current_time = (
+current_time = (
     datetime.now(
-        NEW_YORK_TZ
+        ZoneInfo("America/New_York")
     )
     .strftime(
         "%m/%d/%Y %I:%M %p"
     )
 )
 
-    st.html(
-        f"""
+
+st.html(
+    f"""
 <div class="top-header">
 
 <div class="top-header-left">
@@ -2253,8 +1938,8 @@ Vermont Election Results
 
 <div class="ap-header-status">
 
-<span class="{status_class}">
-{html.escape(election_status)}
+<span class="ap-unofficial">
+UNOFFICIAL
 </span>
 
 <span class="ap-pipe">
@@ -2274,10 +1959,7 @@ Next update:
 
 </div>
 """
-    )
-
-
-render_header()
+)
 
 
 # =========================================================
@@ -2329,16 +2011,14 @@ def render_navigation():
         else "Not loaded"
     )
 
-    last_checked = format_eastern_timestamp(
-        live_status.get(
-            "last_checked"
-        )
+    last_checked = live_status.get(
+        "last_checked",
+        "Not available",
     )
 
-    last_updated = format_eastern_timestamp(
-        live_status.get(
-            "last_updated"
-        )
+    last_updated = live_status.get(
+        "last_updated",
+        "Not available",
     )
 
     federal_active = (
@@ -2475,17 +2155,15 @@ def render_federal():
     )
 
 
-    live_last_checked = format_eastern_timestamp(
-        live_status.get(
-            "last_checked"
-        )
+    live_last_checked = live_status.get(
+        "last_checked",
+        "Not available",
     )
 
 
-    live_last_updated = format_eastern_timestamp(
-        live_status.get(
-            "last_updated"
-        )
+    live_last_updated = live_status.get(
+        "last_updated",
+        "Not available",
     )
 
 
@@ -3022,17 +2700,15 @@ SELECT OFFICE
     )
 
 
-    live_last_checked = format_eastern_timestamp(
-        live_status.get(
-            "last_checked"
-        )
+    live_last_checked = live_status.get(
+        "last_checked",
+        "Not available",
     )
 
 
-    live_last_updated = format_eastern_timestamp(
-        live_status.get(
-            "last_updated"
-        )
+    live_last_updated = live_status.get(
+        "last_updated",
+        "Not available",
     )
 
 
@@ -3464,127 +3140,6 @@ Reporting Units:
 
 
 # =========================================================
-# BACKGROUND REFRESH
-# =========================================================
-
-@st.cache_resource
-def get_refresh_state():
-
-    return {
-        "lock":
-            threading.Lock(),
-
-        "running":
-            False,
-
-        "last_started":
-            0.0,
-
-        "error":
-            None,
-    }
-
-
-def run_refresh_in_background(
-    state,
-):
-
-    try:
-
-        asyncio.run(
-            check_results()
-        )
-
-        error = None
-
-    except Exception as exc:
-
-        error = str(
-            exc
-        )
-
-    finally:
-
-        with state[
-            "lock"
-        ]:
-
-            state[
-                "running"
-            ] = False
-
-            state[
-                "error"
-            ] = error
-
-
-def trigger_background_refresh():
-
-    state = get_refresh_state()
-
-    now = time.monotonic()
-
-    with state[
-        "lock"
-    ]:
-
-        # Do not start a second request while one is still
-        # running, and do not start more often than every
-        # ~25 seconds even if Streamlit reruns for another
-        # reason such as a button click.
-
-        if state[
-            "running"
-        ]:
-
-            return
-
-        if (
-            now
-            - state[
-                "last_started"
-            ]
-            < 25
-        ):
-
-            return
-
-        state[
-            "running"
-        ] = True
-
-        state[
-            "last_started"
-        ] = now
-
-    thread = threading.Thread(
-        target=
-            run_refresh_in_background,
-
-        args=(
-            state,
-        ),
-
-        daemon=True,
-    )
-
-    thread.start()
-
-
-def get_background_refresh_error():
-
-    state = get_refresh_state()
-
-    with state[
-        "lock"
-    ]:
-
-        return state.get(
-            "error"
-        )
-
-
-# =========================================================
 # LIVE DASHBOARD
 # =========================================================
 
@@ -3593,13 +3148,19 @@ def get_background_refresh_error():
 )
 def live_dashboard():
 
-    # Start the network/file refresh in the background.
-    # The current UI remains visible while it runs.
-    trigger_background_refresh()
+    refresh_error = None
 
-    refresh_error = (
-        get_background_refresh_error()
-    )
+    try:
+
+        asyncio.run(
+            check_results()
+        )
+
+    except Exception as error:
+
+        refresh_error = str(
+            error
+        )
 
     nav_col, main_col = st.columns(
         [
