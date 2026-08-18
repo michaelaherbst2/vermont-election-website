@@ -181,15 +181,6 @@ st.html(
     """
 <style>
 
-/* Keep existing content fully visible during Streamlit reruns. */
-[data-stale="true"],
-[data-testid="stAppViewContainer"] [data-stale="true"],
-.stElementContainer[data-stale="true"] {
-    opacity: 1 !important;
-    filter: none !important;
-}
-
-
 html,
 body,
 [data-testid="stAppViewContainer"],
@@ -1241,6 +1232,57 @@ def clean_results(
     ]
 
 
+    # =====================================================
+    # LAST VOTE CHANGE
+    #
+    # monitor.py writes "Last Vote Change".
+    # Website displays it as "Last Vote Change".
+    # =====================================================
+
+    if (
+        "Last Updated" in display.columns
+        and "Last Vote Change" not in display.columns
+    ):
+
+        display = display.rename(
+            columns={
+                "Last Updated":
+                    "Last Vote Change",
+            }
+        )
+
+
+    if "Last Vote Change" in display.columns:
+
+        original_vote_change = (
+            display[
+                "Last Vote Change"
+            ]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
+        parsed_vote_change = pd.to_datetime(
+            original_vote_change,
+            format="mixed",
+            errors="coerce",
+        )
+
+        display[
+            "Last Vote Change"
+        ] = parsed_vote_change.dt.strftime(
+            "%m/%d/%Y %I:%M %p"
+        )
+
+        display.loc[
+            parsed_vote_change.isna(),
+            "Last Vote Change",
+        ] = original_vote_change.loc[
+            parsed_vote_change.isna()
+        ]
+
+
     display = display.rename(
         columns={
             "RepDistrict":
@@ -1476,7 +1518,7 @@ def clean_results(
     # =====================================================
 
     protected = {
-        "Last Updated",
+        "Last Vote Change",
         "Town",
         "Rep District",
         "Sen District",
@@ -1533,7 +1575,7 @@ def clean_results(
     # =====================================================
 
     text_columns = {
-        "Last Updated",
+        "Last Vote Change",
         "Town",
         "Rep District",
         "Sen District",
@@ -1587,8 +1629,21 @@ def clean_results(
             continue
 
 
-        if column in {
-            "Last Updated",
+        if column == "Last Vote Change":
+
+            aggregation[
+                column
+            ] = lambda values: (
+                pd.to_datetime(
+                    values,
+                    format="mixed",
+                    errors="coerce",
+                )
+                .max()
+            )
+
+
+        elif column in {
             "Rep District",
             "Sen District",
         }:
@@ -1625,6 +1680,106 @@ def clean_results(
 
 
     # =====================================================
+    # FORMAT LAST VOTE CHANGE AFTER TOWN AGGREGATION
+    # =====================================================
+
+    if "Last Vote Change" in display.columns:
+
+        parsed_vote_change = pd.to_datetime(
+            display[
+                "Last Vote Change"
+            ],
+            errors="coerce",
+        )
+
+        display[
+            "Last Vote Change"
+        ] = parsed_vote_change.dt.strftime(
+            "%m/%d/%Y %I:%M %p"
+        )
+
+        display.loc[
+            parsed_vote_change.isna(),
+            "Last Vote Change",
+        ] = ""
+
+
+    # =====================================================
+    # FINAL DISPLAY TOTAL
+    #
+    # Candidate votes + Total Write Ins.
+    # This makes Bennington Republican:
+    # 117 + 261 + 2 = 380.
+    # =====================================================
+
+    excluded_total_columns = {
+        "Last Vote Change",
+        "Town",
+        "Rep District",
+        "Sen District",
+        "Total Write Ins",
+        "Others",
+        "Total",
+        "Total Votes",
+        "Blank Votes",
+        "Overvotes",
+    }
+
+    candidate_columns_for_total = [
+        column
+        for column in display.columns
+        if (
+            column not in excluded_total_columns
+            and "write-in"
+            not in str(column).casefold()
+            and "write in"
+            not in str(column).casefold()
+        )
+    ]
+
+    candidate_total = pd.Series(
+        0,
+        index=display.index,
+        dtype="float64",
+    )
+
+    for column in candidate_columns_for_total:
+
+        candidate_total += (
+            pd.to_numeric(
+                display[column],
+                errors="coerce",
+            )
+            .fillna(0)
+        )
+
+    write_in_total = pd.Series(
+        0,
+        index=display.index,
+        dtype="float64",
+    )
+
+    if "Total Write Ins" in display.columns:
+
+        write_in_total = (
+            pd.to_numeric(
+                display[
+                    "Total Write Ins"
+                ],
+                errors="coerce",
+            )
+            .fillna(0)
+        )
+
+    display[
+        "Total"
+    ] = (
+        candidate_total
+        + write_in_total
+    ).astype(int)
+
+
+    # =====================================================
     # INTEGER FORMAT
     # =====================================================
 
@@ -1653,7 +1808,7 @@ def clean_results(
     first_columns = [
         column
         for column in [
-            "Last Updated",
+            "Last Vote Change",
             "Town",
             "Rep District",
             "Sen District",
