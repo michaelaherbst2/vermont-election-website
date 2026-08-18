@@ -9,6 +9,7 @@ import html
 import json
 import asyncio
 
+from monitor import check_results
 import pandas as pd
 import streamlit as st
 
@@ -180,15 +181,6 @@ if section not in {
 st.html(
     """
 <style>
-
-/* Keep existing content fully visible during Streamlit reruns. */
-[data-stale="true"],
-[data-testid="stAppViewContainer"] [data-stale="true"],
-.stElementContainer[data-stale="true"] {
-    opacity: 1 !important;
-    filter: none !important;
-}
-
 
 html,
 body,
@@ -2481,6 +2473,7 @@ Reporting Units:
                 )
 
 
+                st.rerun()
 
 
         else:
@@ -2601,6 +2594,7 @@ Reporting Units:
                 )
 
 
+                st.rerun()
 
 
         else:
@@ -3013,6 +3007,7 @@ Reporting Units:
                 )
 
 
+                st.rerun()
 
 
         else:
@@ -3133,6 +3128,7 @@ Reporting Units:
                 )
 
 
+                st.rerun()
 
 
         else:
@@ -3147,9 +3143,24 @@ Reporting Units:
 # LIVE DASHBOARD
 # =========================================================
 
+@st.fragment(
+    run_every="30s"
+)
 def live_dashboard():
 
     refresh_error = None
+
+    try:
+
+        asyncio.run(
+            check_results()
+        )
+
+    except Exception as error:
+
+        refresh_error = str(
+            error
+        )
 
     nav_col, main_col = st.columns(
         [

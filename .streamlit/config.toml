@@ -1,6 +1,3 @@
-[theme]
-base = "dark"
-primaryColor = "#438cff"
-backgroundColor = "#000000"
-secondaryBackgroundColor = "#080909"
-textColor = "#ffffff"
+[server]
+fileWatcherType = "none"
+runOnSave = false

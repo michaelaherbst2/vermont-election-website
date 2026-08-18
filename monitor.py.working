@@ -469,14 +469,6 @@ def row_signature(row):
         "Town",
         "Rep District",
         "Sen District",
-
-        # Derived ballot/accounting fields must NOT trigger
-        # a Last Vote Change timestamp.
-        "Total",
-        "Total Votes",
-        "Blank Votes",
-        "Overvotes",
-
         "_source_last_updated",
         "lastUpdated",
         "lastUpdatedDate",
@@ -515,10 +507,6 @@ def row_signature(row):
                 number,
             ]
         )
-
-    signature.sort(
-        key=lambda item: item[0]
-    )
 
     return signature
 
@@ -756,80 +744,6 @@ def add_ru_timestamps(
 
 
         # -------------------------------------------------
-        # NORMALIZE PREVIOUS SAVED SIGNATURE
-        #
-        # Older history may contain Total / Total Votes.
-        # Remove derived fields before comparing so a code
-        # change does not falsely restamp every town.
-        # -------------------------------------------------
-
-        previous_signature = None
-
-        if previous is not None:
-
-            previous_signature = []
-
-            for item in (
-                previous.get(
-                    "signature",
-                    [],
-                )
-                or []
-            ):
-
-                if (
-                    not isinstance(
-                        item,
-                        (list, tuple),
-                    )
-                    or len(item) < 2
-                ):
-                    continue
-
-                key = str(
-                    item[0]
-                )
-
-                if key in {
-                    "Last Updated",
-                    "Town",
-                    "Rep District",
-                    "Sen District",
-                    "Total",
-                    "Total Votes",
-                    "Blank Votes",
-                    "Overvotes",
-                    "_source_last_updated",
-                    "lastUpdated",
-                    "lastUpdatedDate",
-                    "updated",
-                    "updateTime",
-                    "timestamp",
-                }:
-                    continue
-
-                try:
-
-                    number = float(
-                        item[1]
-                    )
-
-                except Exception:
-                    continue
-
-                previous_signature.append(
-                    [
-                        key,
-                        number,
-                    ]
-                )
-
-            previous_signature.sort(
-                key=lambda item: item[0]
-            )
-
-
-        # -------------------------------------------------
         # FIRST OBSERVATION = GIVE EVERY REPORTING TOWN
         # AN INITIAL SOURCE TIMESTAMP
         # -------------------------------------------------
@@ -862,7 +776,9 @@ def add_ru_timestamps(
         # -------------------------------------------------
 
         elif (
-            previous_signature
+            previous.get(
+                "signature"
+            )
             != signature
         ):
 
@@ -931,14 +847,6 @@ def add_ru_timestamps(
             ][
                 "reporting"
             ] = reporting
-
-            # Quietly migrate old saved signatures to the new
-            # normalized format without changing the timestamp.
-            section_history[
-                town
-            ][
-                "signature"
-            ] = signature
 
             # Only backfill genuinely blank legacy rows once.
             if not section_history[
